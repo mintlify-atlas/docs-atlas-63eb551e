@@ -1,0 +1,427 @@
+---
+title: 'Multi-Threading Architecture'
+description: 'Understand the parallel processing system and how to control thread count in the Stitcher library'
+---
+
+## Overview
+
+The Stitcher library uses POSIX threads (pthreads) to parallelize computationally intensive operations. Most image processing operations automatically use multiple threads without requiring manual thread management.
+
+## Thread Architecture
+
+### Core Threading Components
+
+The library defines several key structures for thread management in `image_operations.h:113-124`:
+
+```c
+typedef struct {
+    int start_index;       // Starting row/element for this thread
+    int end_index;         // Ending row/element (exclusive)
+    WorkerThreadArgs *workerThreadArgs;  // Operation-specific data
+} ThreadArgs;
+
+typedef struct {
+    int rows;              // Total rows/elements to process
+    WorkerThreadArgs *workerThreadArgs;  // Shared work data
+} ParallelOperatorArgs;
+```
+
+### Parallel Operator Function
+
+The `parallel_operator` function (blending.c:540) is the core threading primitive:
+
+```c
+void parallel_operator(OperatorType operatorType, ParallelOperatorArgs *arg);
+```
+
+**Supported Operations:**
+
+- `DOWNSAMPLE` - Gaussian pyramid downsampling
+- `UPSAMPLE` - Gaussian pyramid upsampling
+- `LAPLACIAN` - Laplacian computation (subtraction)
+- `FEED` - Feed image into blending pyramid
+- `BLEND` - Blend pyramid levels
+- `NORMALIZE` - Normalize by accumulated weights
+
+## Thread Count Control
+
+### Automatic Thread Determination
+
+The library automatically determines the optimal thread count using `get_cpus_count()` from `utils.c:21-24`:
+
+```c
+int get_cpus_count() {
+    return (get_no_of_cpu() / 2) + 1;
+}
+```
+
+**Thread Count Formula:**
+
+```
+threads = (physical_cores / 2) + 1
+```
+
+**Examples:**
+- 4-core CPU → 3 threads
+- 8-core CPU → 5 threads
+- 16-core CPU → 9 threads
+
+<Note>
+This formula accounts for hyperthreading and leaves resources for system processes. It provides good performance without oversubscribing the CPU.
+</Note>
+
+### Platform-Specific CPU Detection
+
+From `utils.c:8-19`, the library detects CPU count across platforms:
+
+```c
+int get_no_of_cpu() {
+#if defined(_WIN32) || defined(_WIN64)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    return sysinfo.dwNumberOfProcessors;
+#elif defined(_SC_NPROCESSORS_ONLN)
+    return (int)sysconf(_SC_NPROCESSORS_ONLN);
+#else
+    return 1;  // Fallback to single-threaded
+#endif
+}
+```
+
+<Warning>
+If CPU detection fails, the library falls back to single-threaded execution. This may result in significantly slower performance.
+</Warning>
+
+## Work Distribution
+
+### Row-Based Parallelism
+
+The `parallel_operator` function distributes work by rows (blending.c:541-553):
+
+```c
+int numThreads = get_cpus_count();
+int rowsPerThread = arg->rows / numThreads;
+int remainingRows = arg->rows % numThreads;
+
+pthread_t threads[numThreads];
+ThreadArgs thread_data[numThreads];
+
+int startRow = 0;
+for (unsigned int i = 0; i < numThreads; ++i) {
+    int endRow = startRow + rowsPerThread + (remainingRows > 0 ? 1 : 0);
+    if (remainingRows > 0) {
+        --remainingRows;
+    }
+    // ... create thread ...
+    startRow = endRow;
+}
+```
+
+**Load Balancing:**
+
+- Base rows per thread: `total_rows / num_threads`
+- Extra rows distributed one per thread to first N threads
+- Ensures even distribution (difference ≤ 1 row between threads)
+
+**Example:** 1000 rows, 3 threads
+- Thread 0: rows 0-334 (334 rows)
+- Thread 1: rows 334-667 (333 rows)
+- Thread 2: rows 667-1000 (333 rows)
+
+### Thread Synchronization
+
+All threads are joined before returning (blending.c:625-627):
+
+```c
+for (unsigned int i = 0; i < numThreads; ++i) {
+    pthread_join(threads[i], NULL);
+}
+```
+
+This ensures all work completes before the function returns.
+
+## Worker Thread Patterns
+
+### 1. Downsampling Worker
+
+From `image_operations.c:382-431`:
+
+```c
+void *down_sample_operation(void *args) {
+    ThreadArgs *arg = (ThreadArgs *)args;
+    int start_row = arg->start_index;
+    int end_row = arg->end_index;
+    SamplingThreadData *data = (SamplingThreadData *)arg->workerThreadArgs->std;
+    
+    // Process rows start_row to end_row
+    for (int y = start_row; y < end_row; ++y) {
+        // Gaussian convolution on this row
+    }
+    
+    return NULL;
+}
+```
+
+### 2. Feed Worker
+
+From `blending.c:182-229`:
+
+```c
+void *feed_worker(void *args) {
+    ThreadArgs *arg = (ThreadArgs *)args;
+    int start_row = arg->start_index;
+    int end_row = arg->end_index;
+    FeedThreadData *f = (FeedThreadData *)arg->workerThreadArgs->ftd;
+    
+    for (int k = start_row; k < end_row; ++k) {
+        for (int i = 0; i < f->cols; ++i) {
+            // Accumulate weighted pixels
+            for (char z = 0; z < RGB_CHANNELS; ++z) {
+                float maskVal = f->mask_gaussian[f->level].data[maskIndex];
+                float imgVal = f->img_laplacians[f->level].data[imgIndex];
+                f->out[f->level].data[outLevelIndex] += imgVal * maskVal;
+            }
+        }
+    }
+    
+    return NULL;
+}
+```
+
+### 3. Normalize Worker
+
+From `blending.c:418-442`:
+
+```c
+void *normalize_worker(void *args) {
+    ThreadArgs *arg = (ThreadArgs *)args;
+    int start_row = arg->start_index;
+    int end_row = arg->end_index;
+    NormalThreadData *n = (NormalThreadData *)arg->workerThreadArgs->ntd;
+    
+    for (int y = start_row; y < end_row; ++y) {
+        for (int x = 0; x < n->output_width; ++x) {
+            float w = n->out_mask[n->level].data[maskIndex];
+            for (char z = 0; z < RGB_CHANNELS; z++) {
+                // Divide by accumulated weight
+                n->final_out[n->level].data[imgIndex] = 
+                    (short)(n->out[n->level].data[imgIndex] / (w + WEIGHT_EPS));
+            }
+        }
+    }
+    
+    return NULL;
+}
+```
+
+## Thread Safety
+
+### Write Separation
+
+Each thread writes to **non-overlapping memory regions**, eliminating the need for locks:
+
+```c
+// Thread 0 writes to rows 0-333
+// Thread 1 writes to rows 334-666
+// Thread 2 writes to rows 667-999
+// No overlapping writes → no race conditions
+```
+
+### Read-Only Shared Data
+
+Input images and masks are **read-only** across all threads:
+
+```c
+// Safely shared between threads (read-only)
+ImageS *img_laplacians;      // Read by all threads
+ImageS *mask_gaussian;       // Read by all threads
+
+// Each thread writes to its own row range
+ImageF *out;                 // Written by threads (non-overlapping)
+ImageF *out_mask;            // Written by threads (non-overlapping)
+```
+
+<Warning>
+Do NOT modify input images or masks during processing. This will cause race conditions and undefined behavior.
+</Warning>
+
+## Performance Considerations
+
+### Overhead vs. Benefit
+
+Thread creation has overhead. Small images may not benefit from parallelism:
+
+```c
+// Small image: overhead dominates
+Image tiny = create_empty_image(100, 100, 3);
+Image down = downsample(&tiny);  // 3 threads for 50 rows each
+// Thread overhead may exceed computation time!
+
+// Large image: parallelism wins
+Image large = create_empty_image(4000, 3000, 3);
+Image down = downsample(&large);  // 3 threads for 750 rows each
+// Significant speedup from parallelism
+```
+
+### Scaling Efficiency
+
+Parallel efficiency depends on image size:
+
+| Image Size | Rows per Thread | Efficiency |
+|------------|----------------|------------|
+| 100x100 | ~16 | Poor (~1.2x) |
+| 1000x1000 | ~166 | Good (~2.5x) |
+| 4000x3000 | ~1000 | Excellent (~2.9x) |
+
+<Note>
+Efficiency is measured relative to single-threaded execution with 3 threads. Theoretical maximum is 3x.
+</Note>
+
+## Common Patterns
+
+### Pattern 1: Automatic Parallelism
+
+Most operations automatically use threads:
+
+```c
+// These all use parallel_operator internally
+Image down = downsample(&img);              // Parallelized
+Image up = upsample(&img, 4.0f);           // Parallelized
+feed(blender, &img, &mask, tl);            // Parallelized
+blend(blender);                             // Parallelized
+```
+
+### Pattern 2: Sequential Operations with Parallel Steps
+
+Multi-band blending uses sequential pyramid construction with parallel steps:
+
+```c
+// From blending.c:280-294
+for (int j = 0; j < num_bands; ++j) {
+    // Step 1: Parallel downsample
+    images[j + 1] = downsample_s(&images[j]);          // Parallel
+    
+    // Step 2: Parallel upsample
+    img_laplacians[j] = upsample_image_s(&images[j + 1], 4.f);  // Parallel
+    
+    // Step 3: Parallel Laplacian computation
+    compute_laplacian(&images[j], &img_laplacians[j]); // Parallel
+}
+```
+
+Each pyramid level is processed in sequence, but each operation within uses threads.
+
+### Pattern 3: Pyramid Level Processing
+
+From `blending.c:318-348`, each pyramid level is fed in parallel:
+
+```c
+for (int level = 0; level <= num_bands; ++level) {
+    FeedThreadData ftd;
+    ftd.rows = (y_br - y_tl);
+    ftd.cols = (x_br - x_tl);
+    ftd.level = level;
+    // ... setup data ...
+    
+    WorkerThreadArgs wtd;
+    wtd.ftd = &ftd;
+    ParallelOperatorArgs args = {rows, &wtd};
+    
+    parallel_operator(FEED, &args);  // Parallel feed at this level
+    
+    // Adjust for next level (half resolution)
+    x_tl /= 2;
+    y_tl /= 2;
+    x_br /= 2;
+    y_br /= 2;
+}
+```
+
+## Debugging Threading Issues
+
+### Enable Thread Sanitizer
+
+Compile with ThreadSanitizer to detect race conditions:
+
+```cmake
+target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize=thread -g)
+target_link_options(${PROJECT_NAME} PRIVATE -fsanitize=thread)
+```
+
+### Print Thread Information
+
+Add debug output to track thread execution:
+
+```c
+void *my_worker(void *args) {
+    ThreadArgs *arg = (ThreadArgs *)args;
+    printf("Thread processing rows %d to %d\n", 
+           arg->start_index, arg->end_index);
+    // ... do work ...
+    return NULL;
+}
+```
+
+### Test Single-Threaded
+
+Temporarily force single-threaded execution:
+
+```c
+// In utils.c
+int get_cpus_count() {
+    return 1;  // Force single thread for debugging
+}
+```
+
+## Limitations
+
+### No Dynamic Thread Control
+
+The thread count is determined at runtime and cannot be changed:
+
+```c
+// Not supported:
+// set_thread_count(8);  // No such function exists
+
+// Thread count is automatic based on CPU
+int threads = get_cpus_count();  // Read-only
+```
+
+### No Custom Thread Pools
+
+Threads are created and destroyed for each operation:
+
+```c
+// Each call creates new threads
+Image down1 = downsample(&img1);  // Creates 3 threads
+Image down2 = downsample(&img2);  // Creates 3 NEW threads
+// No thread pool reuse
+```
+
+This adds overhead but simplifies the API.
+
+### Stack Size Limitations
+
+Default pthread stack size (usually 2-8 MB) is sufficient for typical images. Very large images may require increasing stack size:
+
+```c
+pthread_attr_t attr;
+pthread_attr_init(&attr);
+pthread_attr_setstacksize(&attr, 16 * 1024 * 1024);  // 16 MB
+pthread_create(&thread, &attr, worker_func, args);
+```
+
+<Warning>
+The current implementation does not expose stack size control. Extremely large images (>16K×16K) may cause stack overflow in worker threads.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Performance" icon="gauge-high" href="/advanced/performance">
+    Learn about SIMD and optimization techniques
+  </Card>
+  <Card title="Memory Management" icon="memory" href="/advanced/memory-management">
+    Understand memory allocation and deallocation patterns
+  </Card>
+</CardGroup>

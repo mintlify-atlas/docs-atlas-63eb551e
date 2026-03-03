@@ -1,0 +1,75 @@
+---
+title: Introduction
+description: A high-performance C library for multiband image merging and seamless blending using Laplacian pyramids
+---
+
+# Welcome to Stitcher
+
+**Stitcher** is a high-performance C library for multiband image merging using the Laplacian blending technique. It enables seamless blending of overlapping images, making it ideal for applications such as panorama generation, image stitching, and exposure fusion.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multiband Blending" icon="layer-group">
+    Advanced Laplacian pyramid blending with configurable frequency bands for seamless image merging
+  </Card>
+  
+  <Card title="Feather Blending" icon="feather">
+    Smooth transition blending mode for quick and efficient image composition
+  </Card>
+  
+  <Card title="SIMD Optimization" icon="gauge-high">
+    High-performance operations optimized with SIMD instructions using the SIMDe library
+  </Card>
+  
+  <Card title="Multi-Threading" icon="microchip">
+    Parallel image processing with pthread support for maximum performance
+  </Card>
+  
+  <Card title="JPEG Support" icon="image">
+    Fast JPEG compression and decompression powered by libjpeg-turbo
+  </Card>
+  
+  <Card title="Distance Transform" icon="wand-magic-sparkles">
+    Mask refinement with distance transform for improved blending quality
+  </Card>
+</CardGroup>
+
+## What is Multiband Blending?
+
+Multiband blending is a sophisticated image composition technique that operates on different frequency bands of an image. By decomposing images into Laplacian pyramids, Stitcher can blend high-frequency details and low-frequency colors separately, resulting in seamless transitions without visible seams or artifacts.
+
+This approach is particularly effective for:
+
+- **Panorama stitching**: Merge multiple photos into wide-angle panoramas
+- **Exposure fusion**: Combine bracketed exposures into HDR-like images
+- **Image composition**: Seamlessly blend elements from different images
+
+## Performance
+
+Stitcher is built for speed:
+
+- SIMD-optimized operations using platform-specific instructions (AVX2, NEON)
+- Multi-threaded processing for parallel execution
+- Efficient memory management with minimal allocations
+- Hardware-accelerated JPEG encoding/decoding via libjpeg-turbo
+
+## Platform Support
+
+Stitcher supports multiple platforms:
+
+- **macOS**: x86_64 and ARM64 (Apple Silicon)
+- **iOS**: ARM64 devices and simulators
+- **Android**: arm64-v8a, armeabi-v7a, x86, x86_64
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Build and install Stitcher on your platform
+  </Card>
+  
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Create your first blended image in minutes
+  </Card>
+</CardGroup>

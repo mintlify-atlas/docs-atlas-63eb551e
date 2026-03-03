@@ -1,80 +1,274 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get started with Stitcher in minutes - from installation to your first blended image
 ---
 
-## Get started in three steps
+# Quick Start
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through creating your first blended image using Stitcher. We'll demonstrate both multiband blending and feather blending techniques.
 
-### Step 1: Set up your local environment
+## Your First Blend
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Let's create a simple program that blends two images using Stitcher's multiband blending algorithm.
+
+<Steps>
+  <Step title="Include Required Headers">
+    Start by including the Stitcher headers:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```c
+    #include <stdio.h>
+    #include <time.h>
+    #include "blending.h"
+    #include "utils.h"
+    ```
+  </Step>
+  
+  <Step title="Load Images">
+    Load your input images using `create_image()`:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```c
+    // Load two images to blend
+    Image img_buf1 = create_image("apple.jpeg");
+    Image img_buf2 = create_image("orange.jpeg");
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    <Note>
+      Stitcher currently supports JPEG images only. Make sure your input files are in JPEG format.
+    </Note>
+  </Step>
+  
+  <Step title="Create Masks">
+    Create blend masks that define how the images should be combined:
+    
+    ```c
+    // Create masks for blending
+    // Left image gets left side, right image gets right side
+    Image mask1 = create_image_mask(img_buf1.width, img_buf1.height, 0.1f, 0, 1);
+    Image mask2 = create_image_mask(img_buf2.width, img_buf2.height, 0.1f, 1, 0);
+    ```
+    
+    The `create_image_mask()` function parameters:
+    - `width`, `height`: Mask dimensions
+    - `0.1f`: Feather range (10% of width)
+    - Last two parameters: Left and right weights
+  </Step>
+  
+  <Step title="Configure Output Size">
+    Calculate the output dimensions considering overlap:
+    
+    ```c
+    int out = (img_buf1.width * 0.1f);
+    int out_width = (img_buf1.width * 2) - (out * 2);
+    StitchRect out_size = {0, 0, out_width, img_buf1.height};
+    ```
+  </Step>
+  
+  <Step title="Create Blender">
+    Initialize the blender with desired settings:
+    
+    ```c
+    int num_bands = 5;  // Number of frequency bands
+    Blender *b = create_blender(MULTIBAND, out_size, num_bands);
+    ```
+    
+    <Tip>
+      More bands (5-7) produce smoother blends but take longer. Fewer bands (3-4) are faster but may show slight seams.
+    </Tip>
+  </Step>
+  
+  <Step title="Feed Images to Blender">
+    Add your images to the blender with their positions:
+    
+    ```c
+    // Feed first image at origin
+    StitchPoint pt1 = {0, 0};
+    feed(b, &img_buf1, &mask1, pt1);
+    
+    // Feed second image with offset
+    StitchPoint pt2 = {img_buf2.width - out * 2 - 100, 0};
+    feed(b, &img_buf2, &mask2, pt2);
+    ```
+  </Step>
+  
+  <Step title="Perform Blending">
+    Execute the blending operation:
+    
+    ```c
+    blend(b);
+    ```
+  </Step>
+  
+  <Step title="Save Result">
+    Save the blended image and clean up:
+    
+    ```c
+    if (b->result.data != NULL) {
+        if (save_image(&b->result, "merge.jpg")) {
+            printf("Merged image saved\n");
+        }
+    }
+    
+    // Clean up
+    destroy_blender(b);
+    destroy_image(&img_buf1);
+    destroy_image(&img_buf2);
+    destroy_image(&mask1);
+    destroy_image(&mask2);
+    ```
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Complete Example
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+Here's the complete multiband blending example:
 
-### Step 3: Go live
+```c
+#include <stdio.h>
+#include <time.h>
+#include "blending.h"
+#include "utils.h"
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+int main() {
+    // Load images
+    Image img_buf1 = create_image("apple.jpeg");
+    Image img_buf2 = create_image("orange.jpeg");
 
-## Next steps
+    // Create masks
+    Image mask1 = create_image_mask(img_buf1.width, img_buf1.height, 0.1f, 0, 1);
+    Image mask2 = create_image_mask(img_buf2.width, img_buf2.height, 0.1f, 1, 0);
 
-Now that you have your docs running, explore these key features:
+    // Configure output size
+    int out = (img_buf1.width * 0.1f);
+    int out_width = (img_buf1.width * 2) - (out * 2);
+    StitchRect out_size = {0, 0, out_width, img_buf1.height};
+    int num_bands = 5;
+
+    // Create blender
+    Blender *b = create_blender(MULTIBAND, out_size, num_bands);
+
+    // Feed images
+    StitchPoint pt1 = {0, 0};
+    feed(b, &img_buf1, &mask1, pt1);
+
+    StitchPoint pt2 = {img_buf2.width - out * 2 - 100, 0};
+    feed(b, &img_buf2, &mask2, pt2);
+
+    // Blend
+    blend(b);
+
+    // Save result
+    if (b->result.data != NULL) {
+        if (save_image(&b->result, "merge.jpg")) {
+            printf("Merged image saved\n");
+        }
+    }
+
+    // Clean up
+    destroy_blender(b);
+    destroy_image(&img_buf1);
+    destroy_image(&img_buf2);
+    destroy_image(&mask1);
+    destroy_image(&mask2);
+
+    return 0;
+}
+```
+
+## Feather Blending Alternative
+
+For faster blending with simpler transitions, use feather blending:
+
+```c
+// Create blender with feather mode (no bands parameter needed)
+Blender *b = create_blender(FEATHER, out_size, -1);
+
+// Feed and blend (same as multiband)
+StitchPoint pt1 = {0, 0};
+feed(b, &img_buf1, &mask1, pt1);
+
+StitchPoint pt2 = {img_buf2.width - out * 2 - 100, 0};
+feed(b, &img_buf2, &mask2, pt2);
+
+blend(b);
+
+// Save result
+if (b->result.data != NULL) {
+    save_image(&b->result, "merge_feather.jpg");
+}
+```
+
+<Tip>
+  Feather blending is much faster than multiband blending but may show slight color differences at boundaries. Use it when speed is more important than perfect seamlessness.
+</Tip>
+
+## Compiling Your Program
+
+Compile your program linking against Stitcher:
+
+<CodeGroup>
+
+```bash Using System Libraries
+gcc -O3 -pthread -o stitch \
+  -I/usr/local/include \
+  -L/usr/local/lib -lturbojpeg \
+  stitch.c blending.c jpeg.c image_operations.c utils.c
+```
+
+```bash Using Built Library
+gcc -pthread -o stitch \
+  -I./installs/native-stitcher/macos/x86_64/include \
+  -L./installs/native-stitcher/macos/x86_64/lib \
+  -lNativeStitcher stitch.c
+```
+
+</CodeGroup>
+
+## Performance Tips
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Enable Optimizations" icon="gauge-high">
+    Always compile with `-O3` flag for maximum performance
+  </Card>
+  
+  <Card title="Use SIMD Instructions" icon="microchip">
+    Add `-mavx2 -mfma` on x86_64 or let the compiler auto-detect
+  </Card>
+  
+  <Card title="Adjust Band Count" icon="layer-group">
+    Use 5-7 bands for best quality, 3-4 for faster processing
+  </Card>
+  
+  <Card title="Feather for Speed" icon="feather">
+    Use FEATHER mode when speed matters more than seamlessness
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Measuring Performance
+
+To measure blending performance, use `clock_gettime()`:
+
+```c
+#include <time.h>
+
+struct timespec start, end;
+double duration;
+
+clock_gettime(CLOCK_MONOTONIC, &start);
+blend(b);
+clock_gettime(CLOCK_MONOTONIC, &end);
+
+duration = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+printf("Blend time: %.2f seconds\n", duration);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api/blender">
+    Explore the complete API documentation
+  </Card>
+  
+  <Card title="Advanced Examples" icon="code" href="/examples/multiband-blending">
+    Learn advanced blending techniques
+  </Card>
+</CardGroup>

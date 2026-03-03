@@ -1,0 +1,304 @@
+---
+title: 'Panorama Stitching'
+description: 'Create seamless panoramas by stitching multiple images together'
+---
+
+Panorama stitching combines multiple overlapping images into a single wide-angle view. This example demonstrates how to use the Stitcher library to create horizontal panoramas from left and right images.
+
+## Overview
+
+This example adapts the basic blending techniques to create panoramas. The key differences from simple blending are:
+- Positioning images side-by-side with appropriate overlap
+- Using masks that favor the center of each image
+- Handling multiple images in sequence
+
+## Two-Image Panorama
+
+<Steps>
+
+### Load panorama images
+
+Load your left and right images:
+
+```c
+#include "blending.h"
+#include "utils.h"
+
+void create_panorama() {
+    // Load left and right images
+    Image left_img = create_image("left.jpeg");
+    Image right_img = create_image("right.jpeg");
+    
+    // Images should have similar heights and overlapping content
+    // Typical overlap: 20-40% for good results
+```
+
+For best results:
+- Use images captured from the same camera position (rotated around lens)
+- Ensure consistent exposure and white balance
+- Have 20-40% overlap between adjacent images
+
+### Create panorama masks
+
+Create masks that favor the center of each image:
+
+```c
+    // Create masks with larger transition zones for panoramas
+    float overlap_ratio = 0.3f;  // 30% overlap
+    
+    // Left image: fade from full to transparent on the right side
+    Image mask_left = create_image_mask(
+        left_img.width, 
+        left_img.height, 
+        overlap_ratio,
+        0,  // Left side: opaque
+        1   // Right side: fade to transparent
+    );
+    
+    // Right image: fade from transparent to full on the right side
+    Image mask_right = create_image_mask(
+        right_img.width, 
+        right_img.height, 
+        overlap_ratio,
+        1,  // Left side: fade from transparent
+        0   // Right side: opaque
+    );
+```
+
+The masks create smooth transitions in the overlap region, preventing visible seams.
+
+### Calculate panorama dimensions
+
+Determine the output size based on image dimensions and overlap:
+
+```c
+    // Calculate the overlap in pixels
+    int overlap_pixels = (int)(left_img.width * overlap_ratio);
+    
+    // Total width = left width + right width - 2 * overlap
+    int pano_width = left_img.width + right_img.width - (2 * overlap_pixels);
+    
+    // Assume images have the same height
+    int pano_height = left_img.height;
+    
+    StitchRect output_rect = {0, 0, pano_width, pano_height};
+```
+
+### Create blender and feed images
+
+Use multiband blending for high-quality panoramas:
+
+```c
+    // Create multiband blender with 5-6 bands for best quality
+    int num_bands = 6;
+    Blender *blender = create_blender(MULTIBAND, output_rect, num_bands);
+    
+    // Feed left image at origin
+    StitchPoint left_pos = {0, 0};
+    feed(blender, &left_img, &mask_left, left_pos);
+    
+    // Position right image with calculated overlap
+    StitchPoint right_pos = {
+        left_img.width - (2 * overlap_pixels),
+        0
+    };
+    feed(blender, &right_img, &mask_right, right_pos);
+```
+
+### Blend and save panorama
+
+Execute the blend and save the result:
+
+```c
+    // Perform the blend
+    blend(blender);
+    
+    // Save panorama
+    if (blender->result.data != NULL) {
+        if (save_image(&blender->result, "panorama.jpg")) {
+            printf("Panorama saved successfully\n");
+        }
+    }
+    
+    // Cleanup
+    destroy_blender(blender);
+    destroy_image(&left_img);
+    destroy_image(&right_img);
+    destroy_image(&mask_left);
+    destroy_image(&mask_right);
+}
+```
+
+</Steps>
+
+## Multi-Image Panorama
+
+For panoramas with more than two images:
+
+```c
+void create_multi_image_panorama() {
+    // Define number of images
+    int num_images = 4;
+    const char* filenames[] = {
+        "img1.jpeg",
+        "img2.jpeg",
+        "img3.jpeg",
+        "img4.jpeg"
+    };
+    
+    // Load all images
+    Image images[4];
+    Image masks[4];
+    
+    float overlap_ratio = 0.3f;
+    
+    for (int i = 0; i < num_images; i++) {
+        images[i] = create_image(filenames[i]);
+        
+        // Create appropriate mask for each image
+        if (i == 0) {
+            // First image: only fade on right
+            masks[i] = create_image_mask(
+                images[i].width, images[i].height, 
+                overlap_ratio, 0, 1
+            );
+        } else if (i == num_images - 1) {
+            // Last image: only fade on left
+            masks[i] = create_image_mask(
+                images[i].width, images[i].height,
+                overlap_ratio, 1, 0
+            );
+        } else {
+            // Middle images: use both sides
+            // For simplicity, create two masks and blend them
+            masks[i] = create_image_mask(
+                images[i].width, images[i].height,
+                overlap_ratio * 0.5f, 0, 1
+            );
+        }
+    }
+    
+    // Calculate total panorama width
+    int overlap_pixels = (int)(images[0].width * overlap_ratio);
+    int total_width = images[0].width;
+    for (int i = 1; i < num_images; i++) {
+        total_width += images[i].width - (2 * overlap_pixels);
+    }
+    
+    StitchRect output = {0, 0, total_width, images[0].height};
+    Blender *blender = create_blender(MULTIBAND, output, 6);
+    
+    // Feed all images
+    int current_x = 0;
+    for (int i = 0; i < num_images; i++) {
+        StitchPoint pos = {current_x, 0};
+        feed(blender, &images[i], &masks[i], pos);
+        
+        // Calculate next x position
+        if (i < num_images - 1) {
+            current_x += images[i].width - (2 * overlap_pixels);
+        }
+    }
+    
+    // Blend and save
+    blend(blender);
+    
+    if (blender->result.data != NULL) {
+        save_image(&blender->result, "multi_panorama.jpg");
+        printf("Multi-image panorama saved\n");
+    }
+    
+    // Cleanup
+    destroy_blender(blender);
+    for (int i = 0; i < num_images; i++) {
+        destroy_image(&images[i]);
+        destroy_image(&masks[i]);
+    }
+}
+```
+
+## Vertical Panoramas
+
+For vertical panoramas (top to bottom), adapt the positioning:
+
+```c
+void create_vertical_panorama() {
+    Image top_img = create_image("top.jpeg");
+    Image bottom_img = create_image("bottom.jpeg");
+    
+    // Use vertical masks (requires vertical mask function)
+    // For now, rotate images or adapt mask creation
+    float overlap_ratio = 0.3f;
+    int overlap_pixels = (int)(top_img.height * overlap_ratio);
+    
+    // Calculate vertical panorama dimensions
+    int pano_width = top_img.width;
+    int pano_height = top_img.height + bottom_img.height - (2 * overlap_pixels);
+    
+    StitchRect output = {0, 0, pano_width, pano_height};
+    Blender *blender = create_blender(MULTIBAND, output, 6);
+    
+    // Feed images vertically
+    StitchPoint top_pos = {0, 0};
+    feed(blender, &top_img, &mask_top, top_pos);
+    
+    StitchPoint bottom_pos = {0, top_img.height - (2 * overlap_pixels)};
+    feed(blender, &bottom_img, &mask_bottom, bottom_pos);
+    
+    blend(blender);
+    save_image(&blender->result, "vertical_panorama.jpg");
+    
+    // Cleanup...
+}
+```
+
+## Best Practices
+
+### Image Capture
+- Use a tripod for consistent alignment
+- Overlap adjacent images by 20-40%
+- Maintain consistent exposure across all shots
+- Use manual focus to prevent focus shifts
+- Shoot in RAW format for better post-processing
+
+### Blending Configuration
+- Use multiband blending (6-7 bands) for best quality
+- Increase overlap ratio for complex scenes
+- Consider feather blending for quick previews
+
+### Performance Tips
+- Process images at reduced resolution for preview
+- Use feather blending during development
+- Switch to multiband for final output
+- Process panoramas in parallel when creating multiple outputs
+
+## Common Issues
+
+### Visible Seams
+- Increase the number of bands (try 6-7 instead of 5)
+- Ensure proper overlap between images
+- Check that masks are correctly oriented
+- Verify images have similar exposure
+
+### Alignment Issues
+- This library handles blending, not alignment
+- Pre-align images using feature matching before stitching
+- Use proper overlap ratio (20-40%)
+- Ensure images were captured with proper technique
+
+### Memory Issues
+- Process fewer images at once
+- Reduce image resolution before processing
+- Use feather blending instead of multiband
+
+## Expected Output
+
+A successful panorama will have:
+- Seamless transitions between images
+- No visible seams or color discontinuities
+- Proper perspective throughout
+- Natural-looking blend zones
+
+Processing time for a 4-image panorama (1920×1080 each):
+- Feather blending: ~0.2-0.3 seconds
+- Multiband blending: ~1.0-1.5 seconds

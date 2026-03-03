@@ -1,0 +1,310 @@
+---
+title: 'Blending Algorithms'
+description: 'Understanding multiband and feather blending techniques for seamless image stitching'
+---
+
+The Stitcher library provides two powerful blending algorithms to merge overlapping images seamlessly: **multiband blending** and **feather blending**. Each method has distinct characteristics and use cases.
+
+## Blending Types
+
+The library supports two blending modes defined by the `BlenderType` enum:
+
+```c blending.h
+typedef enum {
+    MULTIBAND,
+    FEATHER
+} BlenderType;
+```
+
+## Multiband Blending
+
+Multiband blending uses Laplacian and Gaussian pyramids to blend images at multiple frequency bands, producing the highest quality results with minimal visible seams.
+
+### How It Works
+
+<Steps>
+  <Step title="Build Image Pyramids">
+    The algorithm creates a pyramid of progressively downsampled versions of each input image. The number of pyramid levels is determined by:
+
+    ```c blending.c
+    double max_len = (double)(out_size.width > out_size.height ? 
+                              out_size.width : out_size.height);
+    blender->num_bands = min(blender->num_bands, 
+                            (int)ceil(log(max_len) / log(2.0)));
+    ```
+
+    This ensures the pyramid has enough levels to cover the entire image while respecting the `MAX_BANDS` limit of 7.
+  </Step>
+
+  <Step title="Compute Laplacian Pyramids">
+    For each pyramid level, the algorithm computes the Laplacian by upsampling the next level and subtracting it from the current level:
+
+    ```c blending.c
+    void compute_laplacian(ImageS *original, ImageS *upsampled) {
+        for (int i = 0; i < total_size; ++i) {
+            upsampled->data[i] = original->data[i] - upsampled->data[i];
+        }
+    }
+    ```
+
+    This captures the high-frequency details at each scale.
+  </Step>
+
+  <Step title="Create Gaussian Mask Pyramids">
+    Masks are downsampled to create a Gaussian pyramid that matches the image pyramid structure. This allows smooth transitions between images at each frequency band.
+  </Step>
+
+  <Step title="Blend Each Level">
+    At each pyramid level, images are blended using their corresponding mask weights:
+
+    ```c blending.c
+    float maskVal = mask_gaussian[level].data[maskIndex] * (1.0 / 255.0);
+    float imgVal = img_laplacians[level].data[imgIndex] * maskVal;
+    out[level].data[outLevelIndex] += imgVal;
+    ```
+  </Step>
+
+  <Step title="Reconstruct Final Image">
+    The blended Laplacian pyramid is collapsed by progressively upsampling and adding each level:
+
+    ```c blending.c
+    for (int level = num_bands; level > 0; --level) {
+        blended_image = upsample_image_s(&blended_image, 4.f);
+        blended_image.data[i] = blended_image.data[i] + out_level.data[i];
+    }
+    ```
+  </Step>
+</Steps>
+
+### When to Use Multiband Blending
+
+<CardGroup cols={2}>
+  <Card title="Best For" icon="check">
+    - High-quality panoramas
+    - Images with varying exposure
+    - Complex texture boundaries
+    - Professional photography workflows
+  </Card>
+  
+  <Card title="Trade-offs" icon="clock">
+    - Higher computational cost
+    - More memory usage
+    - Requires more processing time
+    - Best with 5-7 bands
+  </Card>
+</CardGroup>
+
+### Creating a Multiband Blender
+
+```c Example Usage
+// Create output canvas
+StitchRect out_size = {0, 0, 2000, 1000};
+int num_bands = 5;  // Typically 5-7 bands
+
+// Create multiband blender
+Blender *blender = create_blender(MULTIBAND, out_size, num_bands);
+
+// Feed images with masks
+StitchPoint pt1 = {0, 0};
+feed(blender, &img1, &mask1, pt1);
+
+StitchPoint pt2 = {500, 0};
+feed(blender, &img2, &mask2, pt2);
+
+// Perform blending
+blend(blender);
+
+// Access result
+if (blender->result.data != NULL) {
+    save_image(&blender->result, "output.jpg");
+}
+
+destroy_blender(blender);
+```
+
+## Feather Blending
+
+Feather blending is a simpler, faster technique that performs weighted averaging based on mask values. It's ideal for real-time applications or when computational resources are limited.
+
+### How It Works
+
+Feather blending directly weights pixel values by their mask values and accumulates them:
+
+```c blending.c
+float weight = mask_img->data[mask_pos] / 255.0f;
+out_mask->data[dst_mask] += weight;
+
+for (int channel = 0; channel < RGB_CHANNELS; channel++) {
+    out->data[dst_idx + channel] += img->data[image_pos + channel] * weight;
+}
+```
+
+The final pixel values are normalized by the accumulated weights:
+
+```c blending.c
+final_out[level].data[imgIndex] = 
+    (short)(out[level].data[imgIndex] / (w + WEIGHT_EPS));
+```
+
+<Note>
+  The `WEIGHT_EPS` constant (1e-5f) prevents division by zero in areas with no image coverage.
+</Note>
+
+### When to Use Feather Blending
+
+<CardGroup cols={2}>
+  <Card title="Best For" icon="gauge-high">
+    - Real-time stitching
+    - Mobile applications
+    - Video stitching
+    - Memory-constrained environments
+  </Card>
+  
+  <Card title="Trade-offs" icon="triangle-exclamation">
+    - Visible seams possible
+    - Less effective with exposure differences
+    - Requires careful mask design
+    - May show ghosting artifacts
+  </Card>
+</CardGroup>
+
+### Creating a Feather Blender
+
+```c Example Usage
+StitchRect out_size = {0, 0, 2000, 1000};
+
+// Create feather blender (num_bands ignored)
+Blender *blender = create_blender(FEATHER, out_size, -1);
+
+// Optionally enable distance transform for better masks
+blender->do_distance_transform = 1;
+
+// Feed images
+StitchPoint pt1 = {0, 0};
+feed(blender, &img1, &mask1, pt1);
+
+StitchPoint pt2 = {500, 0};
+feed(blender, &img2, &mask2, pt2);
+
+// Blend
+blend(blender);
+
+save_image(&blender->result, "output.jpg");
+destroy_blender(blender);
+```
+
+## Blender Structure
+
+The `Blender` struct manages the blending state:
+
+```c blending.h
+typedef struct {
+    int num_bands;              // Number of pyramid levels (multiband only)
+    StitchRect output_size;     // Padded output dimensions
+    StitchRect real_out_size;   // Actual output dimensions
+    int *out_width_levels;      // Width at each pyramid level
+    int *out_height_levels;     // Height at each pyramid level
+    ImageF *out;                // Accumulated float images
+    ImageF *out_mask;           // Accumulated mask weights
+    ImageS *final_out;          // Final normalized output
+    Image result;               // Final 8-bit result
+    ImageS *img_laplacians;     // Laplacian pyramid (multiband)
+    ImageS *mask_gaussian;      // Gaussian mask pyramid (multiband)
+    BlenderType blender_type;   // MULTIBAND or FEATHER
+    float sharpness;            // Sharpness parameter (feather)
+    int do_distance_transform;  // Enable distance transform
+} Blender;
+```
+
+## API Reference
+
+### Core Functions
+
+<ParamField path="create_blender" type="function">
+  ```c
+  Blender *create_blender(BlenderType blender_type, StitchRect out_size, int nb);
+  ```
+  
+  Creates a new blender instance.
+  
+  **Parameters:**
+  - `blender_type`: `MULTIBAND` or `FEATHER`
+  - `out_size`: Output canvas dimensions
+  - `nb`: Number of bands (multiband only, ignored for feather)
+  
+  **Returns:** Pointer to blender or `NULL` on failure
+</ParamField>
+
+<ParamField path="feed" type="function">
+  ```c
+  int feed(Blender *b, Image *img, Image *mask_img, StitchPoint tl);
+  ```
+  
+  Feeds an image and its mask into the blender at a specified position.
+  
+  **Parameters:**
+  - `b`: Blender instance
+  - `img`: Input image (RGB)
+  - `mask_img`: Grayscale mask (same dimensions as img)
+  - `tl`: Top-left position in output canvas
+  
+  **Returns:** 1 on success, 0 on failure
+  
+  <Warning>
+    Image and mask must have identical dimensions (asserted).
+  </Warning>
+</ParamField>
+
+<ParamField path="blend" type="function">
+  ```c
+  void blend(Blender *b);
+  ```
+  
+  Performs the blending operation. After calling, the result is available in `b->result`.
+</ParamField>
+
+<ParamField path="destroy_blender" type="function">
+  ```c
+  void destroy_blender(Blender *blender);
+  ```
+  
+  Frees all memory associated with the blender.
+</ParamField>
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Memory Usage">
+    **Multiband:** Requires memory for multiple pyramid levels. For an image of size `W × H`:
+    ```
+    Memory ≈ W × H × channels × (1 + 1/2 + 1/4 + ... + 1/2^n) × sizeof(type)
+    ```
+    
+    **Feather:** Only requires memory for the output canvas, approximately:
+    ```
+    Memory ≈ W × H × channels × (sizeof(float) + sizeof(short) + sizeof(unsigned char))
+    ```
+  </Accordion>
+  
+  <Accordion title="Processing Time">
+    - **Multiband:** O(n × w × h × bands) where n is number of images
+    - **Feather:** O(n × w × h)
+    - Both use multi-threading with `pthread` for parallel processing
+  </Accordion>
+  
+  <Accordion title="Quality vs Speed">
+    Use multiband blending when quality is paramount and processing time is acceptable. Use feather blending for interactive applications or when processing many images in sequence.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Image Types" icon="image" href="/concepts/image-types">
+    Learn about Image, ImageF, and ImageS types used in blending
+  </Card>
+  
+  <Card title="Masks" icon="mask" href="/concepts/masks">
+    Understand how to create and use masks for optimal blending
+  </Card>
+</CardGroup>

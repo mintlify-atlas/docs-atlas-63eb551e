@@ -1,0 +1,546 @@
+---
+title: 'Image Operations'
+description: 'Core image processing functions for manipulation and transformation'
+---
+
+## Overview
+
+Provides fundamental image operations including creation, destruction, sampling, cropping, and distance transforms. Supports multiple image formats with different data types.
+
+## Types
+
+### StitchPoint
+
+Represents a 2D point in image space.
+
+```c
+typedef struct {
+    int x;
+    int y;
+} StitchPoint;
+```
+
+<ResponseField name="x" type="int">
+  Horizontal coordinate
+</ResponseField>
+
+<ResponseField name="y" type="int">
+  Vertical coordinate
+</ResponseField>
+
+### StitchRect
+
+Represents a rectangular region in image space.
+
+```c
+typedef struct {
+    int x;
+    int y;
+    int width;
+    int height;
+} StitchRect;
+```
+
+<ResponseField name="x" type="int">
+  Left edge x-coordinate
+</ResponseField>
+
+<ResponseField name="y" type="int">
+  Top edge y-coordinate
+</ResponseField>
+
+<ResponseField name="width" type="int">
+  Rectangle width in pixels
+</ResponseField>
+
+<ResponseField name="height" type="int">
+  Rectangle height in pixels
+</ResponseField>
+
+### ImageType
+
+Enumeration of image data types.
+
+```c
+typedef enum {
+    IMAGE,    // unsigned char
+    IMAGES,   // short
+    IMAGEF    // float
+} ImageType;
+```
+
+## Functions
+
+### create_image
+
+Loads an image from a file.
+
+```c
+Image create_image(const char *filename);
+```
+
+<ParamField path="filename" type="const char*" required>
+  Path to the image file (typically JPEG)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Loaded image structure with allocated data buffer
+</ResponseField>
+
+#### Example
+
+```c
+Image img = create_image("photo.jpg");
+if (img.data != NULL) {
+    printf("Loaded %dx%d image with %d channels\n", 
+           img.width, img.height, img.channels);
+}
+```
+
+### create_empty_image
+
+Creates an empty image with allocated buffer.
+
+```c
+Image create_empty_image(int width, int height, int channels);
+```
+
+<ParamField path="width" type="int" required>
+  Image width in pixels
+</ParamField>
+
+<ParamField path="height" type="int" required>
+  Image height in pixels
+</ParamField>
+
+<ParamField path="channels" type="int" required>
+  Number of color channels (typically 1 for grayscale, 3 for RGB)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Newly allocated empty image (unsigned char data)
+</ResponseField>
+
+### create_empty_image_s
+
+Creates an empty short integer image.
+
+```c
+ImageS create_empty_image_s(int width, int height, int channels);
+```
+
+<ParamField path="width" type="int" required>
+  Image width in pixels
+</ParamField>
+
+<ParamField path="height" type="int" required>
+  Image height in pixels
+</ParamField>
+
+<ParamField path="channels" type="int" required>
+  Number of color channels
+</ParamField>
+
+<ResponseField name="return" type="ImageS">
+  Newly allocated empty image (short data)
+</ResponseField>
+
+### create_empty_image_f
+
+Creates an empty floating-point image.
+
+```c
+ImageF create_empty_image_f(int width, int height, int channels);
+```
+
+<ParamField path="width" type="int" required>
+  Image width in pixels
+</ParamField>
+
+<ParamField path="height" type="int" required>
+  Image height in pixels
+</ParamField>
+
+<ParamField path="channels" type="int" required>
+  Number of color channels
+</ParamField>
+
+<ResponseField name="return" type="ImageF">
+  Newly allocated empty image (float data)
+</ResponseField>
+
+### destroy_image
+
+Frees memory allocated for an unsigned char image.
+
+```c
+void destroy_image(Image *img);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to image to destroy
+</ParamField>
+
+<Note>
+  Always call this to prevent memory leaks after you're done with an Image.
+</Note>
+
+### destroy_image_s
+
+Frees memory allocated for a short integer image.
+
+```c
+void destroy_image_s(ImageS *img);
+```
+
+<ParamField path="img" type="ImageS*" required>
+  Pointer to short image to destroy
+</ParamField>
+
+### destroy_image_f
+
+Frees memory allocated for a floating-point image.
+
+```c
+void destroy_image_f(ImageF *img);
+```
+
+<ParamField path="img" type="ImageF*" required>
+  Pointer to float image to destroy
+</ParamField>
+
+### upsample
+
+Upsamples an unsigned char image by a given factor.
+
+```c
+Image upsample(Image *img, float upsample_factor);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to source image
+</ParamField>
+
+<ParamField path="upsample_factor" type="float" required>
+  Scale factor (e.g., 2.0 doubles dimensions)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Newly allocated upsampled image
+</ResponseField>
+
+<Note>
+  The returned image has new dimensions: width × upsample_factor and height × upsample_factor.
+</Note>
+
+### upsample_image_s
+
+Upsamples a short integer image.
+
+```c
+ImageS upsample_image_s(ImageS *img, float upsample_factor);
+```
+
+<ParamField path="img" type="ImageS*" required>
+  Pointer to source short image
+</ParamField>
+
+<ParamField path="upsample_factor" type="float" required>
+  Scale factor
+</ParamField>
+
+<ResponseField name="return" type="ImageS">
+  Newly allocated upsampled short image
+</ResponseField>
+
+### upsample_image_f
+
+Upsamples a floating-point image.
+
+```c
+ImageF upsample_image_f(ImageF *img, float upsample_factor);
+```
+
+<ParamField path="img" type="ImageF*" required>
+  Pointer to source float image
+</ParamField>
+
+<ParamField path="upsample_factor" type="float" required>
+  Scale factor
+</ParamField>
+
+<ResponseField name="return" type="ImageF">
+  Newly allocated upsampled float image
+</ResponseField>
+
+### downsample
+
+Downsamples an unsigned char image by factor of 2.
+
+```c
+Image downsample(Image *img);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to source image
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Newly allocated downsampled image (half dimensions)
+</ResponseField>
+
+<Note>
+  Uses Gaussian smoothing before downsampling to prevent aliasing.
+</Note>
+
+### downsample_s
+
+Downsamples a short integer image by factor of 2.
+
+```c
+ImageS downsample_s(ImageS *img);
+```
+
+<ParamField path="img" type="ImageS*" required>
+  Pointer to source short image
+</ParamField>
+
+<ResponseField name="return" type="ImageS">
+  Newly allocated downsampled short image
+</ResponseField>
+
+### downsample_f
+
+Downsamples a floating-point image by factor of 2.
+
+```c
+ImageF downsample_f(ImageF *img);
+```
+
+<ParamField path="img" type="ImageF*" required>
+  Pointer to source float image
+</ParamField>
+
+<ResponseField name="return" type="ImageF">
+  Newly allocated downsampled float image
+</ResponseField>
+
+### crop_image
+
+Crops an image in-place by removing borders.
+
+```c
+void crop_image(Image *img, int cut_top, int cut_bottom, int cut_left, int cut_right);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to image to crop (modified in-place)
+</ParamField>
+
+<ParamField path="cut_top" type="int" required>
+  Number of pixels to remove from top
+</ParamField>
+
+<ParamField path="cut_bottom" type="int" required>
+  Number of pixels to remove from bottom
+</ParamField>
+
+<ParamField path="cut_left" type="int" required>
+  Number of pixels to remove from left
+</ParamField>
+
+<ParamField path="cut_right" type="int" required>
+  Number of pixels to remove from right
+</ParamField>
+
+<Note>
+  This modifies the image structure in-place. The original data buffer is freed and replaced.
+</Note>
+
+#### Example
+
+```c
+Image img = create_image("photo.jpg");
+// Remove 10 pixels from each edge
+crop_image(&img, 10, 10, 10, 10);
+printf("Cropped to %dx%d\n", img.width, img.height);
+```
+
+### distance_transform
+
+Applies distance transform to a mask image.
+
+```c
+void distance_transform(Image *mask);
+```
+
+<ParamField path="mask" type="Image*" required>
+  Pointer to binary mask image (modified in-place)
+</ParamField>
+
+<Note>
+  Converts binary mask to distance field where each pixel's value represents distance to nearest zero pixel. Useful for creating smooth blending weights.
+</Note>
+
+#### Example
+
+```c
+Image mask = create_mask(640, 480, 0.1f, 0, 1);
+distance_transform(&mask);
+// Mask now contains distance values instead of binary 0/255
+```
+
+### create_image_mask
+
+Creates a horizontal gradient mask for blending.
+
+```c
+Image create_image_mask(int width, int height, float range, int left, int right);
+```
+
+<ParamField path="width" type="int" required>
+  Mask width in pixels
+</ParamField>
+
+<ParamField path="height" type="int" required>
+  Mask height in pixels
+</ParamField>
+
+<ParamField path="range" type="float" required>
+  Gradient transition range as fraction of width (0.0-1.0)
+</ParamField>
+
+<ParamField path="left" type="int" required>
+  Value for left side (0 or 1)
+</ParamField>
+
+<ParamField path="right" type="int" required>
+  Value for right side (0 or 1)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Grayscale gradient mask image
+</ResponseField>
+
+<Note>
+  Creates a horizontal gradient from left to right. The `range` parameter controls the width of the transition zone.
+</Note>
+
+#### Example
+
+```c
+// Create mask: white on left, black on right, 10% transition
+Image mask1 = create_image_mask(1024, 768, 0.1f, 1, 0);
+
+// Create mask: black on left, white on right, 10% transition  
+Image mask2 = create_image_mask(1024, 768, 0.1f, 0, 1);
+```
+
+### save_image
+
+Saves an image to disk as JPEG.
+
+```c
+int save_image(const Image *img, const char *out_filename);
+```
+
+<ParamField path="img" type="const Image*" required>
+  Pointer to image to save
+</ParamField>
+
+<ParamField path="out_filename" type="const char*" required>
+  Output file path
+</ParamField>
+
+<ResponseField name="return" type="int">
+  1 on success, 0 on failure
+</ResponseField>
+
+#### Example
+
+```c
+if (save_image(&img, "output.jpg")) {
+    printf("Image saved successfully\n");
+}
+```
+
+### image_size
+
+Calculates total size in bytes of an unsigned char image.
+
+```c
+int image_size(Image *img);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to image
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Total bytes (width × height × channels)
+</ResponseField>
+
+### image_size_s
+
+Calculates total size in bytes of a short image.
+
+```c
+int image_size_s(ImageS *img);
+```
+
+<ParamField path="img" type="ImageS*" required>
+  Pointer to short image
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Total bytes (width × height × channels × sizeof(short))
+</ResponseField>
+
+### image_size_f
+
+Calculates total size in bytes of a float image.
+
+```c
+int image_size_f(ImageF *img);
+```
+
+<ParamField path="img" type="ImageF*" required>
+  Pointer to float image
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Total bytes (width × height × channels × sizeof(float))
+</ResponseField>
+
+## Usage Example
+
+```c
+#include "image_operations.h"
+
+void process_image() {
+    // Load image
+    Image img = create_image("input.jpg");
+    
+    // Create a working copy
+    Image working = create_empty_image(img.width, img.height, img.channels);
+    memcpy(working.data, img.data, image_size(&img));
+    
+    // Crop borders
+    crop_image(&working, 50, 50, 50, 50);
+    
+    // Downsample
+    Image small = downsample(&working);
+    
+    // Upsample back
+    Image large = upsample(&small, 2.0f);
+    
+    // Save result
+    save_image(&large, "processed.jpg");
+    
+    // Cleanup
+    destroy_image(&img);
+    destroy_image(&working);
+    destroy_image(&small);
+    destroy_image(&large);
+}
+```

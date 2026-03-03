@@ -1,0 +1,395 @@
+---
+title: 'Image Types'
+description: 'Understanding the three image data structures in Stitcher: Image, ImageF, and ImageS'
+---
+
+Stitcher uses three different image structures optimized for different stages of the processing pipeline. Each type stores pixel data with different precision and range characteristics.
+
+## Type Overview
+
+All three image types share a common structure but differ in their data type:
+
+<Tabs>
+  <Tab title="Image">
+    ```c image_operations.h
+    typedef struct {
+        unsigned char *data;
+        int width;
+        int height;
+        int channels;
+    } Image;
+    ```
+    
+    Standard 8-bit image representation. Each pixel component is stored as an unsigned byte (0-255).
+    
+    **Use for:**
+    - Input images from JPEG files
+    - Final output images
+    - Masks
+    - I/O operations
+  </Tab>
+  
+  <Tab title="ImageF">
+    ```c image_operations.h
+    typedef struct {
+        float *data;
+        int width;
+        int height;
+        int channels;
+    } ImageF;
+    ```
+    
+    Floating-point image for high-precision calculations. Each pixel component is a 32-bit float.
+    
+    **Use for:**
+    - Accumulating weighted pixel values during blending
+    - Intermediate computations requiring precision
+    - Gaussian filtering operations
+    - Avoiding quantization artifacts
+  </Tab>
+  
+  <Tab title="ImageS">
+    ```c image_operations.h
+    typedef struct {
+        short *data;
+        int width;
+        int height;
+        int channels;
+    } ImageS;
+    ```
+    
+    Signed 16-bit integer image. Each pixel component is a short (-32,768 to 32,767).
+    
+    **Use for:**
+    - Laplacian pyramid computations (can be negative)
+    - Upsampling and downsampling operations
+    - Intermediate pyramid representations
+    - Memory-efficient storage compared to float
+  </Tab>
+</Tabs>
+
+## Common Properties
+
+All image types share these fields:
+
+<ParamField path="data" type="pointer">
+  Pointer to the pixel data array. Data is stored in row-major order with interleaved channels.
+  
+  **Memory layout for RGB:**
+  ```
+  [R0, G0, B0, R1, G1, B1, ..., Rn, Gn, Bn]
+  ```
+  
+  **Accessing pixel (x, y), channel c:**
+  ```c
+  int index = (y * width + x) * channels + c;
+  value = data[index];
+  ```
+</ParamField>
+
+<ParamField path="width" type="int">
+  Image width in pixels.
+</ParamField>
+
+<ParamField path="height" type="int">
+  Image height in pixels.
+</ParamField>
+
+<ParamField path="channels" type="int">
+  Number of channels per pixel:
+  - `RGB_CHANNELS` (3) for color images
+  - `GRAY_CHANNELS` (1) for grayscale/masks
+</ParamField>
+
+## Image Type Constants
+
+```c image_operations.h
+#define RGB_CHANNELS 3
+#define GRAY_CHANNELS 1
+```
+
+The `ImageType` enum is used internally for type dispatch:
+
+```c image_operations.h
+typedef enum {
+    IMAGE,
+    IMAGES,
+    IMAGEF
+} ImageType;
+```
+
+## Creating Images
+
+### Empty Images
+
+Create uninitialized images for output buffers:
+
+```c Example
+// Create 8-bit RGB image
+Image img = create_empty_image(1920, 1080, RGB_CHANNELS);
+
+// Create float accumulation buffer
+ImageF acc = create_empty_image_f(1920, 1080, RGB_CHANNELS);
+
+// Create short pyramid level
+ImageS pyramid = create_empty_image_s(960, 540, RGB_CHANNELS);
+```
+
+<ParamField path="create_empty_image" type="function">
+  ```c
+  Image create_empty_image(int width, int height, int channels);
+  ```
+  Creates an 8-bit image with allocated but uninitialized data.
+</ParamField>
+
+<ParamField path="create_empty_image_f" type="function">
+  ```c
+  ImageF create_empty_image_f(int width, int height, int channels);
+  ```
+  Creates a float image with allocated but uninitialized data.
+</ParamField>
+
+<ParamField path="create_empty_image_s" type="function">
+  ```c
+  ImageS create_empty_image_s(int width, int height, int channels);
+  ```
+  Creates a short image with allocated but uninitialized data.
+</ParamField>
+
+### From Files
+
+```c Loading Images
+// Load JPEG image
+Image img = create_image("photo.jpeg");
+if (img.data == NULL) {
+    fprintf(stderr, "Failed to load image\n");
+    return;
+}
+
+// Use the image...
+
+// Clean up
+destroy_image(&img);
+```
+
+## Type Conversions
+
+Stitcher provides conversion functions between image types:
+
+<CodeGroup>
+```c Image to ImageF
+Image input = create_image("photo.jpg");
+ImageF output = create_empty_image_f(input.width, input.height, input.channels);
+convert_image_to_image_f(&input, &output);
+// output.data[i] = (float)input.data[i]
+```
+
+```c Image to ImageS
+Image input = create_image("photo.jpg");
+ImageS output = create_empty_image_s(input.width, input.height, input.channels);
+convert_image_to_image_s(&input, &output);
+// output.data[i] = (short)clamp(input.data[i], 0, 255)
+```
+
+```c ImageS to Image
+ImageS pyramid_level = /* ... */;
+Image output = create_empty_image(pyramid_level.width, 
+                                  pyramid_level.height, 
+                                  pyramid_level.channels);
+convert_images_to_image(&pyramid_level, &output);
+// output.data[i] = (unsigned char)clamp(pyramid_level.data[i], 0, 255)
+```
+
+```c ImageF to Image
+ImageF accumulated = /* ... */;
+Image output = create_empty_image(accumulated.width, 
+                                  accumulated.height, 
+                                  accumulated.channels);
+convert_imagef_to_image(&accumulated, &output);
+// output.data[i] = (unsigned char)clamp((int)accumulated.data[i], 0, 255)
+```
+</CodeGroup>
+
+<Note>
+  All conversions clamp values to the valid range [0, 255] for the output type. The `clamp` function ensures no overflow or underflow occurs.
+</Note>
+
+## Memory Management
+
+### Calculating Image Size
+
+```c Size Functions
+// Get total number of elements (width × height × channels)
+int size = image_size(&img);          // For Image
+int size_s = image_size_s(&img_s);    // For ImageS
+int size_f = image_size_f(&img_f);    // For ImageF
+
+// Calculate memory usage
+size_t bytes = size * sizeof(unsigned char);  // Image
+size_t bytes_s = size_s * sizeof(short);      // ImageS
+size_t bytes_f = size_f * sizeof(float);      // ImageF
+```
+
+### Destroying Images
+
+<Warning>
+  Always destroy images when finished to prevent memory leaks. Each `create_*` or `load_*` function allocates memory that must be freed.
+</Warning>
+
+```c Cleanup
+Image img = create_image("input.jpg");
+ImageF img_f = create_empty_image_f(100, 100, 3);
+ImageS img_s = create_empty_image_s(100, 100, 3);
+
+// Use images...
+
+// Clean up
+destroy_image(&img);
+destroy_image_f(&img_f);
+destroy_image_s(&img_s);
+```
+
+<ParamField path="destroy_image" type="function">
+  ```c
+  void destroy_image(Image *img);
+  ```
+  Frees the data buffer and resets the image structure.
+</ParamField>
+
+<ParamField path="destroy_image_f" type="function">
+  ```c
+  void destroy_image_f(ImageF *img);
+  ```
+  Frees the float data buffer.
+</ParamField>
+
+<ParamField path="destroy_image_s" type="function">
+  ```c
+  void destroy_image_s(ImageS *img);
+  ```
+  Frees the short data buffer.
+</ParamField>
+
+## Choosing the Right Type
+
+<AccordionGroup>
+  <Accordion title="Use Image when...">
+    - Reading images from files (JPEG, PNG)
+    - Writing final output images
+    - Creating masks for blending
+    - Working with standard 8-bit color data
+    - Minimizing memory usage for final results
+    
+    **Memory:** W × H × C × 1 byte
+  </Accordion>
+  
+  <Accordion title="Use ImageF when...">
+    - Accumulating weighted sums (blending)
+    - Performing multiple arithmetic operations
+    - Requiring high precision
+    - Storing normalized weights (0.0 to 1.0)
+    - Avoiding quantization artifacts
+    
+    **Memory:** W × H × C × 4 bytes
+  </Accordion>
+  
+  <Accordion title="Use ImageS when...">
+    - Computing Laplacian pyramids (needs negative values)
+    - Storing intermediate pyramid levels
+    - Upsampling/downsampling operations
+    - Needing signed values with reasonable precision
+    - Balancing memory vs. precision
+    
+    **Memory:** W × H × C × 2 bytes
+  </Accordion>
+</AccordionGroup>
+
+## Image Processing Pipeline Example
+
+A typical multiband blending pipeline uses all three types:
+
+```c Complete Pipeline
+// 1. Load input as Image (8-bit)
+Image input = create_image("photo.jpg");
+Image mask = create_mask(input.width, input.height, 0.1f, 0, 1);
+
+// 2. Convert to ImageS for pyramid processing
+ImageS input_s = create_empty_image_s(input.width, input.height, RGB_CHANNELS);
+convert_image_to_image_s(&input, &input_s);
+
+// 3. Build Laplacian pyramid (ImageS supports negative values)
+ImageS downsampled = downsample_s(&input_s);
+ImageS upsampled = upsample_image_s(&downsampled, 4.0f);
+// Laplacian = original - upsampled (can be negative)
+for (int i = 0; i < image_size_s(&input_s); i++) {
+    upsampled.data[i] = input_s.data[i] - upsampled.data[i];
+}
+
+// 4. Accumulate in ImageF for precision
+ImageF accumulated = create_empty_image_f(input.width, input.height, RGB_CHANNELS);
+for (int i = 0; i < image_size_f(&accumulated); i++) {
+    accumulated.data[i] += upsampled.data[i] * weight;
+}
+
+// 5. Normalize and convert to ImageS
+ImageS normalized = create_empty_image_s(accumulated.width, 
+                                         accumulated.height, 
+                                         RGB_CHANNELS);
+for (int i = 0; i < image_size_s(&normalized); i++) {
+    normalized.data[i] = (short)(accumulated.data[i] / total_weight);
+}
+
+// 6. Convert final result back to Image for output
+Image output = create_empty_image(normalized.width, 
+                                  normalized.height, 
+                                  RGB_CHANNELS);
+convert_images_to_image(&normalized, &output);
+
+// 7. Save result
+save_image(&output, "result.jpg");
+
+// 8. Cleanup
+destroy_image(&input);
+destroy_image(&mask);
+destroy_image_s(&input_s);
+destroy_image_s(&downsampled);
+destroy_image_s(&upsampled);
+destroy_image_f(&accumulated);
+destroy_image_s(&normalized);
+destroy_image(&output);
+```
+
+## Performance Tips
+
+<CardGroup cols={2}>
+  <Card title="Memory Access" icon="memory">
+    Access pixels sequentially (row by row) for better cache performance. The data is stored in row-major order.
+  </Card>
+  
+  <Card title="Type Selection" icon="gauge">
+    Use the smallest type that provides sufficient precision:
+    - Image: Display and I/O
+    - ImageS: Intermediate processing
+    - ImageF: Accumulation only
+  </Card>
+  
+  <Card title="Avoid Conversions" icon="arrow-right-arrow-left">
+    Minimize type conversions in tight loops. Convert once at the beginning and end of processing stages.
+  </Card>
+  
+  <Card title="Parallel Processing" icon="microchip">
+    The library uses pthread for parallel operations on all image types. Ensure sufficient CPU cores are available.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Blending" icon="layer-group" href="/concepts/blending">
+    Learn how different image types are used in blending algorithms
+  </Card>
+  
+  <Card title="Masks" icon="mask" href="/concepts/masks">
+    Understand mask creation using the Image type
+  </Card>
+</CardGroup>

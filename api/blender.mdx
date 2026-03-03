@@ -1,0 +1,294 @@
+---
+title: 'Blender API'
+description: 'Multi-band and feather blending for seamless image stitching'
+---
+
+## Overview
+
+The Blender API provides multi-band and feather blending algorithms for seamless image composition. It supports pyramid-based blending with configurable band levels.
+
+## Types
+
+### BlenderType
+
+Enumeration of available blending algorithms.
+
+```c
+typedef enum {
+    MULTIBAND,
+    FEATHER
+} BlenderType;
+```
+
+<ResponseField name="MULTIBAND" type="enum">
+  Multi-band blending using Laplacian pyramids for smooth transitions between images
+</ResponseField>
+
+<ResponseField name="FEATHER" type="enum">
+  Simple feather blending using weighted averaging based on mask values
+</ResponseField>
+
+### Blender
+
+Main blender structure containing blending state and buffers.
+
+```c
+typedef struct {
+    int num_bands;
+    StitchRect output_size;
+    StitchRect real_out_size;
+    int *out_width_levels;
+    int *out_height_levels;
+    ImageF *out;
+    ImageF *out_mask;
+    ImageS *final_out;
+    Image result;
+    ImageS *img_laplacians;
+    ImageS *mask_gaussian;
+    BlenderType blender_type;
+    float sharpness;
+    int do_distance_transform;
+} Blender;
+```
+
+<ResponseField name="num_bands" type="int">
+  Number of pyramid levels for multi-band blending
+</ResponseField>
+
+<ResponseField name="output_size" type="StitchRect">
+  Requested output dimensions
+</ResponseField>
+
+<ResponseField name="real_out_size" type="StitchRect">
+  Actual output dimensions after processing
+</ResponseField>
+
+<ResponseField name="out_width_levels" type="int*">
+  Array of widths for each pyramid level
+</ResponseField>
+
+<ResponseField name="out_height_levels" type="int*">
+  Array of heights for each pyramid level
+</ResponseField>
+
+<ResponseField name="out" type="ImageF*">
+  Floating-point accumulation buffer for blended output
+</ResponseField>
+
+<ResponseField name="out_mask" type="ImageF*">
+  Floating-point mask accumulation buffer
+</ResponseField>
+
+<ResponseField name="final_out" type="ImageS*">
+  Short integer intermediate output buffer
+</ResponseField>
+
+<ResponseField name="result" type="Image">
+  Final blended image (unsigned char)
+</ResponseField>
+
+<ResponseField name="img_laplacians" type="ImageS*">
+  Laplacian pyramid for multi-band blending
+</ResponseField>
+
+<ResponseField name="mask_gaussian" type="ImageS*">
+  Gaussian pyramid of masks
+</ResponseField>
+
+<ResponseField name="blender_type" type="BlenderType">
+  Algorithm type (MULTIBAND or FEATHER)
+</ResponseField>
+
+<ResponseField name="sharpness" type="float">
+  Sharpness parameter for blending
+</ResponseField>
+
+<ResponseField name="do_distance_transform" type="int">
+  Whether to apply distance transform to masks
+</ResponseField>
+
+## Functions
+
+### create_blender
+
+Creates and initializes a new blender instance.
+
+```c
+Blender *create_blender(BlenderType blender_type, StitchRect out_size, int nb);
+```
+
+<ParamField path="blender_type" type="BlenderType" required>
+  Type of blending algorithm to use (MULTIBAND or FEATHER)
+</ParamField>
+
+<ParamField path="out_size" type="StitchRect" required>
+  Output image dimensions and position
+</ParamField>
+
+<ParamField path="nb" type="int" required>
+  Number of pyramid bands for MULTIBAND (ignored for FEATHER, use -1)
+</ParamField>
+
+<ResponseField name="return" type="Blender*">
+  Pointer to newly created Blender instance, or NULL on failure
+</ResponseField>
+
+<Note>
+  For FEATHER blending, pass -1 for the `nb` parameter as band count is not used.
+</Note>
+
+#### Example
+
+```c
+// Create multi-band blender with 5 pyramid levels
+StitchRect out_size = {0, 0, 1024, 768};
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+
+// Create feather blender
+Blender *b_feather = create_blender(FEATHER, out_size, -1);
+```
+
+### feed
+
+Feeds an image and its mask into the blender for composition.
+
+```c
+int feed(Blender *b, Image *img, Image *maskImg, StitchPoint tl);
+```
+
+<ParamField path="b" type="Blender*" required>
+  Pointer to the Blender instance
+</ParamField>
+
+<ParamField path="img" type="Image*" required>
+  Source image to blend
+</ParamField>
+
+<ParamField path="maskImg" type="Image*" required>
+  Mask image defining blending weights (same dimensions as img)
+</ParamField>
+
+<ParamField path="tl" type="StitchPoint" required>
+  Top-left position where the image should be placed in output canvas
+</ParamField>
+
+<ResponseField name="return" type="int">
+  0 on success, non-zero on failure
+</ResponseField>
+
+<Note>
+  The mask should be a grayscale image where pixel values indicate blending weight (0-255). Higher values mean more contribution from the source image.
+</Note>
+
+#### Example
+
+```c
+Image img1 = create_image("image1.jpg");
+Image mask1 = create_mask(img1.width, img1.height, 0.1f, 0, 1);
+StitchPoint pt1 = {0, 0};
+
+feed(b, &img1, &mask1, pt1);
+
+// Feed second image with offset
+Image img2 = create_image("image2.jpg");
+Image mask2 = create_mask(img2.width, img2.height, 0.1f, 1, 0);
+StitchPoint pt2 = {512, 0};
+
+feed(b, &img2, &mask2, pt2);
+```
+
+### blend
+
+Performs the blending operation on all fed images.
+
+```c
+void blend(Blender *b);
+```
+
+<ParamField path="b" type="Blender*" required>
+  Pointer to the Blender instance with fed images
+</ParamField>
+
+<Note>
+  Call this after feeding all images. The result will be available in `b->result`.
+</Note>
+
+#### Example
+
+```c
+// After feeding all images
+blend(b);
+
+// Access the result
+if (b->result.data != NULL) {
+    save_image(&b->result, "blended_output.jpg");
+}
+```
+
+### destroy_blender
+
+Frees all resources associated with a blender instance.
+
+```c
+void destroy_blender(Blender *blender);
+```
+
+<ParamField path="blender" type="Blender*" required>
+  Pointer to the Blender instance to destroy
+</ParamField>
+
+<Note>
+  Always call this function when finished to prevent memory leaks.
+</Note>
+
+#### Example
+
+```c
+destroy_blender(b);
+```
+
+## Complete Usage Example
+
+```c
+#include "blending.h"
+
+void stitch_images() {
+    // Load images
+    Image img1 = create_image("apple.jpeg");
+    Image img2 = create_image("orange.jpeg");
+    
+    // Create masks for blending
+    Image mask1 = create_mask(img1.width, img1.height, 0.1f, 0, 1);
+    Image mask2 = create_mask(img2.width, img2.height, 0.1f, 1, 0);
+    
+    // Calculate output size
+    int overlap = img1.width * 0.1f;
+    int out_width = (img1.width * 2) - (overlap * 2);
+    StitchRect out_size = {0, 0, out_width, img1.height};
+    
+    // Create blender with 5 bands
+    Blender *b = create_blender(MULTIBAND, out_size, 5);
+    
+    // Feed images
+    StitchPoint pt1 = {0, 0};
+    feed(b, &img1, &mask1, pt1);
+    
+    StitchPoint pt2 = {img2.width - overlap * 2 - 100, 0};
+    feed(b, &img2, &mask2, pt2);
+    
+    // Blend
+    blend(b);
+    
+    // Save result
+    if (b->result.data != NULL) {
+        save_image(&b->result, "stitched.jpg");
+    }
+    
+    // Cleanup
+    destroy_blender(b);
+    destroy_image(&img1);
+    destroy_image(&img2);
+    destroy_image(&mask1);
+    destroy_image(&mask2);
+}
+```

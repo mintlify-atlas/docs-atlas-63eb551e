@@ -1,0 +1,293 @@
+---
+title: 'Utility Functions'
+description: 'Helper functions for common operations and system queries'
+---
+
+## Overview
+
+Provides utility functions for CPU detection, value clamping, min/max operations, and index reflection for boundary handling.
+
+## Functions
+
+### get_cpus_count
+
+Returns the number of available CPU cores.
+
+```c
+int get_cpus_count();
+```
+
+<ResponseField name="return" type="int">
+  Number of CPU cores available on the system
+</ResponseField>
+
+<Note>
+  Useful for determining optimal thread count for parallel operations. Typically used to create thread pools for image processing tasks.
+</Note>
+
+#### Example
+
+```c
+int num_threads = get_cpus_count();
+printf("Using %d threads for processing\n", num_threads);
+
+// Create thread pool based on CPU count
+pthread_t *threads = malloc(num_threads * sizeof(pthread_t));
+```
+
+### clamp
+
+Clamps an integer value to a specified range.
+
+```c
+int clamp(int value, int min, int max);
+```
+
+<ParamField path="value" type="int" required>
+  Value to clamp
+</ParamField>
+
+<ParamField path="min" type="int" required>
+  Minimum allowed value
+</ParamField>
+
+<ParamField path="max" type="int" required>
+  Maximum allowed value
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Clamped value: min if value < min, max if value > max, otherwise value
+</ResponseField>
+
+<Note>
+  Ensures the value stays within bounds [min, max]. Commonly used for pixel value clamping and boundary checking.
+</Note>
+
+#### Example
+
+```c
+int pixel_value = 300;
+int clamped = clamp(pixel_value, 0, 255);
+printf("%d\n", clamped); // Output: 255
+
+int negative = clamp(-50, 0, 255);
+printf("%d\n", negative); // Output: 0
+
+int normal = clamp(128, 0, 255);
+printf("%d\n", normal); // Output: 128
+```
+
+### min
+
+Returns the minimum of two integers.
+
+```c
+int min(int a, int b);
+```
+
+<ParamField path="a" type="int" required>
+  First value
+</ParamField>
+
+<ParamField path="b" type="int" required>
+  Second value
+</ParamField>
+
+<ResponseField name="return" type="int">
+  The smaller of a and b
+</ResponseField>
+
+#### Example
+
+```c
+int width = min(image1.width, image2.width);
+printf("Minimum width: %d\n", width);
+
+// Limit processing to available data
+int process_count = min(available_items, max_items);
+```
+
+### max
+
+Returns the maximum of two integers.
+
+```c
+int max(int a, int b);
+```
+
+<ParamField path="a" type="int" required>
+  First value
+</ParamField>
+
+<ParamField path="b" type="int" required>
+  Second value
+</ParamField>
+
+<ResponseField name="return" type="int">
+  The larger of a and b
+</ResponseField>
+
+#### Example
+
+```c
+int height = max(image1.height, image2.height);
+printf("Maximum height: %d\n", height);
+
+// Ensure minimum buffer size
+int buffer_size = max(required_size, 1024);
+```
+
+### reflect_index
+
+Reflects an index at image boundaries for border handling.
+
+```c
+int reflect_index(int i, int n);
+```
+
+<ParamField path="i" type="int" required>
+  Index to reflect (can be negative or >= n)
+</ParamField>
+
+<ParamField path="n" type="int" required>
+  Maximum valid index (typically image dimension)
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Reflected index in valid range [0, n-1]
+</ResponseField>
+
+<Note>
+  Used for reflective boundary handling in image operations. When accessing pixels outside image bounds, this function mirrors the index back into valid range.
+</Note>
+
+#### Example
+
+```c
+int width = 100;
+
+// Negative indices reflect back
+int idx1 = reflect_index(-1, width);
+printf("%d\n", idx1); // Output: 1 (reflects off left edge)
+
+int idx2 = reflect_index(-5, width);
+printf("%d\n", idx2); // Output: 5
+
+// Indices beyond bounds reflect back
+int idx3 = reflect_index(100, width);
+printf("%d\n", idx3); // Output: 98 (reflects off right edge)
+
+int idx4 = reflect_index(105, width);
+printf("%d\n", idx4); // Output: 93
+
+// Valid indices pass through
+int idx5 = reflect_index(50, width);
+printf("%d\n", idx5); // Output: 50
+```
+
+### Practical Usage: Reflective Border Access
+
+```c
+// Access pixel with reflective boundary handling
+unsigned char get_pixel_safe(Image *img, int x, int y, int channel) {
+    // Reflect coordinates if out of bounds
+    int safe_x = reflect_index(x, img->width);
+    int safe_y = reflect_index(y, img->height);
+    
+    // Clamp channel to valid range
+    int safe_c = clamp(channel, 0, img->channels - 1);
+    
+    // Calculate index and return pixel
+    int idx = (safe_y * img->width + safe_x) * img->channels + safe_c;
+    return img->data[idx];
+}
+
+// Use in filtering operations
+void apply_filter(Image *img, float kernel[3][3]) {
+    Image output = create_empty_image(img->width, img->height, img->channels);
+    
+    for (int y = 0; y < img->height; y++) {
+        for (int x = 0; x < img->width; x++) {
+            for (int c = 0; c < img->channels; c++) {
+                float sum = 0.0f;
+                
+                // Apply 3x3 kernel with reflective boundaries
+                for (int ky = -1; ky <= 1; ky++) {
+                    for (int kx = -1; kx <= 1; kx++) {
+                        unsigned char pixel = get_pixel_safe(img, 
+                                                            x + kx, 
+                                                            y + ky, 
+                                                            c);
+                        sum += pixel * kernel[ky + 1][kx + 1];
+                    }
+                }
+                
+                int idx = (y * img->width + x) * img->channels + c;
+                output.data[idx] = (unsigned char)clamp((int)sum, 0, 255);
+            }
+        }
+    }
+    
+    // Use output...
+    destroy_image(&output);
+}
+```
+
+## Complete Usage Example
+
+```c
+#include "utils.h"
+#include "image_operations.h"
+#include <pthread.h>
+
+typedef struct {
+    Image *img;
+    int start_row;
+    int end_row;
+} ThreadData;
+
+void *process_rows(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    
+    for (int y = data->start_row; y < data->end_row; y++) {
+        for (int x = 0; x < data->img->width; x++) {
+            for (int c = 0; c < data->img->channels; c++) {
+                int idx = (y * data->img->width + x) * data->img->channels + c;
+                
+                // Example: brighten and clamp
+                int value = data->img->data[idx] + 50;
+                data->img->data[idx] = clamp(value, 0, 255);
+            }
+        }
+    }
+    
+    return NULL;
+}
+
+void parallel_brighten(Image *img) {
+    int num_threads = get_cpus_count();
+    pthread_t *threads = malloc(num_threads * sizeof(pthread_t));
+    ThreadData *thread_data = malloc(num_threads * sizeof(ThreadData));
+    
+    int rows_per_thread = img->height / num_threads;
+    
+    // Create threads
+    for (int i = 0; i < num_threads; i++) {
+        thread_data[i].img = img;
+        thread_data[i].start_row = i * rows_per_thread;
+        thread_data[i].end_row = (i == num_threads - 1) 
+                                  ? img->height 
+                                  : (i + 1) * rows_per_thread;
+        
+        pthread_create(&threads[i], NULL, process_rows, &thread_data[i]);
+    }
+    
+    // Wait for completion
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+    
+    free(threads);
+    free(thread_data);
+}
+```

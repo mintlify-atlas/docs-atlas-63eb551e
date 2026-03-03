@@ -1,0 +1,504 @@
+---
+title: 'Masks'
+description: 'Creating and using masks to control blending regions and transitions in image stitching'
+---
+
+Masks are grayscale images that control how pixels from different source images are weighted during blending. Proper mask design is crucial for seamless image stitching.
+
+## What is a Mask?
+
+A mask is a single-channel (grayscale) `Image` where each pixel value represents the weight or contribution of the corresponding pixel in the source image:
+
+- **255 (white)**: Full contribution - pixel is fully included
+- **0 (black)**: No contribution - pixel is excluded
+- **1-254 (gray)**: Partial contribution - pixel is blended proportionally
+
+```c Mask Structure
+Image mask;
+mask.channels = GRAY_CHANNELS;  // Always 1 for masks
+mask.width = source_image.width;
+mask.height = source_image.height;
+// mask.data[i] ranges from 0 to 255
+```
+
+<Note>
+  Masks must have the same dimensions as their corresponding images. The library asserts this requirement in the `feed()` function.
+</Note>
+
+## Creating Masks
+
+### Horizontal Masks
+
+Horizontal masks fade from left to right or right to left, perfect for panoramas:
+
+```c jpeg.h
+Image create_mask(int width, int height, float range, int left, int right);
+```
+
+<ParamField path="width" type="int">
+  Width of the mask (must match image width)
+</ParamField>
+
+<ParamField path="height" type="int">
+  Height of the mask (must match image height)
+</ParamField>
+
+<ParamField path="range" type="float">
+  Fraction of width for the transition region (0.0 to 1.0)
+  
+  - `0.1` = 10% of width will be masked
+  - `0.2` = 20% of width will be masked
+</ParamField>
+
+<ParamField path="left" type="int">
+  Non-zero to mask the left edge (fade from black to white)
+</ParamField>
+
+<ParamField path="right" type="int">
+  Non-zero to mask the right edge (fade from white to black)
+</ParamField>
+
+<Tabs>
+  <Tab title="Left Mask">
+    ```c examples/stitch.c
+    // Mask for left image in panorama
+    // Left 10% is black (0), rest is white (255)
+    Image mask = create_mask(img.width, img.height, 0.1f, 1, 0);
+    ```
+    
+    **Visual representation:**
+    ```
+    0────────255═════════════255
+    [10% fade] [90% full]
+    ```
+    
+    Use for images on the left side of a panorama.
+  </Tab>
+  
+  <Tab title="Right Mask">
+    ```c examples/stitch.c
+    // Mask for right image in panorama
+    // Right 10% is black (0), rest is white (255)
+    Image mask = create_mask(img.width, img.height, 0.1f, 0, 1);
+    ```
+    
+    **Visual representation:**
+    ```
+    255═════════════255────────0
+            [90% full] [10% fade]
+    ```
+    
+    Use for images on the right side of a panorama.
+  </Tab>
+  
+  <Tab title="Both Sides">
+    ```c
+    // Mask for middle image in panorama
+    // Both edges fade out
+    Image mask = create_mask(img.width, img.height, 0.1f, 1, 1);
+    ```
+    
+    **Visual representation:**
+    ```
+    0────255═════════════255────0
+    [10%]    [80% full]    [10%]
+    ```
+    
+    Use for images in the middle of a multi-image panorama.
+  </Tab>
+</Tabs>
+
+### Implementation Details
+
+The `create_mask` function creates hard-edged masks:
+
+```c jpeg.c
+Image create_mask(int width, int height, float range, int left, int right) {
+    unsigned char *grayBuffer = (unsigned char *)malloc(width * height);
+    memset(grayBuffer, 255, width * height);  // Start with all white
+    
+    int cut = (int)(range * width);  // Calculate transition width
+    
+    if (left) {
+        // Mask left edge
+        for (int i = 0; i < cut; ++i) {
+            for (int j = 0; j < height; ++j) {
+                grayBuffer[i + width * j] = 0;
+            }
+        }
+    }
+    
+    if (right) {
+        // Mask right edge
+        for (int i = 0; i < cut; ++i) {
+            for (int j = 0; j < height; ++j) {
+                grayBuffer[(width - i - 1) + width * j] = 0;
+            }
+        }
+    }
+    
+    // ... set result fields
+}
+```
+
+### Vertical Masks
+
+Vertical masks fade from top to bottom or bottom to top:
+
+```c jpeg.h
+Image create_vertical_mask(int width, int height, float range, int top, int bottom);
+```
+
+<ParamField path="top" type="int">
+  Non-zero to mask the top edge
+</ParamField>
+
+<ParamField path="bottom" type="int">
+  Non-zero to mask the bottom edge
+</ParamField>
+
+```c Example
+// Mask top 15% for top image in vertical stitch
+Image mask = create_vertical_mask(img.width, img.height, 0.15f, 1, 0);
+```
+
+## Distance Transform
+
+The distance transform creates smooth gradients from hard-edged masks, resulting in better blending transitions.
+
+### How It Works
+
+Distance transform computes the distance from each pixel to the nearest masked (zero-valued) pixel:
+
+<Steps>
+  <Step title="Initialize">
+    Convert binary mask to distance map:
+    - Pixels with value > 0 become 0.0
+    - Pixels with value 0 become 255.0
+  </Step>
+  
+  <Step title="Forward Pass">
+    Scan left-to-right, top-to-bottom, updating each pixel with the minimum distance to its neighbors:
+    
+    ```c image_operations.c
+    const float mask5[] = {1.0f, 1.4f};  // Orthogonal and diagonal distances
+    
+    min_val = fminf(current, get_pixel(x - 1, y) + mask5[0]);      // Left
+    min_val = fminf(min_val, get_pixel(x, y - 1) + mask5[0]);      // Top
+    min_val = fminf(min_val, get_pixel(x - 1, y - 1) + mask5[1]);  // Top-left
+    min_val = fminf(min_val, get_pixel(x + 1, y - 1) + mask5[1]);  // Top-right
+    ```
+  </Step>
+  
+  <Step title="Backward Pass">
+    Scan right-to-left, bottom-to-top, refining distances:
+    
+    ```c image_operations.c
+    min_val = fminf(current, get_pixel(x + 1, y) + mask5[0]);      // Right
+    min_val = fminf(min_val, get_pixel(x, y + 1) + mask5[0]);      // Bottom
+    min_val = fminf(min_val, get_pixel(x + 1, y + 1) + mask5[1]);  // Bottom-right
+    min_val = fminf(min_val, get_pixel(x - 1, y + 1) + mask5[1]);  // Bottom-left
+    ```
+  </Step>
+  
+  <Step title="Apply">
+    Replace original mask values with computed distances (but preserve original white regions).
+  </Step>
+</Steps>
+
+### Enabling Distance Transform
+
+<Tabs>
+  <Tab title="Feather Blending">
+    Distance transform is particularly important for feather blending:
+    
+    ```c
+    Blender *blender = create_blender(FEATHER, out_size, -1);
+    
+    // Enable distance transform
+    blender->do_distance_transform = 1;
+    
+    // Now masks will be smoothed automatically during feed()
+    feed(blender, &img, &mask, tl);
+    ```
+    
+    <Info>
+      For feather blending, always consider enabling distance transform to create smooth transitions.
+    </Info>
+  </Tab>
+  
+  <Tab title="Manual Application">
+    Apply distance transform directly to a mask:
+    
+    ```c
+    Image mask = create_mask(width, height, 0.1f, 0, 1);
+    
+    // Apply distance transform in-place
+    distance_transform(&mask);
+    
+    // Mask now has smooth gradients
+    ```
+    
+    <Warning>
+      Mask must be single-channel (GRAY_CHANNELS). The function asserts this requirement.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Before and After Distance Transform
+
+<CodeGroup>
+```c Before (Hard Edge)
+Mask values: [0, 0, 0, 255, 255, 255, 255, 255]
+             └─────┘ └───────────────────┘
+              Cut      Full region
+```
+
+```c After (Smooth Gradient)
+Mask values: [0, 0, 0, 1.0, 2.0, 3.0, 4.0, 5.0, ...]
+             └─────┘ └─────────────────────────┘
+              Cut      Distance gradient
+```
+</CodeGroup>
+
+## Mask Usage in Blending
+
+### Multiband Blending
+
+Multiband blending uses masks at multiple scales:
+
+```c blending.c
+// 1. Convert mask to ImageS
+ImageS mask_img_ = create_empty_image_s(mask_img->width, 
+                                        mask_img->height, 
+                                        mask_img->channels);
+convert_image_to_image_s(mask_img, &mask_img_);
+
+// 2. Build Gaussian pyramid of masks
+for (int j = 0; j < num_bands; ++j) {
+    mask_gaussian[j] = mask_img_;
+    mask_img_ = downsample_s(&mask_img_);  // Half resolution
+}
+
+// 3. Blend each pyramid level with corresponding mask
+float maskVal = mask_gaussian[level].data[maskIndex] * (1.0 / 255.0);
+float imgVal = img_laplacians[level].data[imgIndex] * maskVal;
+out[level].data[outLevelIndex] += imgVal;
+```
+
+<Note>
+  Multiband blending automatically downsamples masks to match each pyramid level, creating a Gaussian mask pyramid.
+</Note>
+
+### Feather Blending
+
+Feather blending uses masks at full resolution:
+
+```c blending.c
+float weight = mask_img->data[mask_pos] / 255.0f;
+out_mask->data[dst_mask] += weight;
+
+for (int channel = 0; channel < RGB_CHANNELS; channel++) {
+    out->data[dst_idx + channel] += img->data[image_pos + channel] * weight;
+}
+```
+
+The final pixel value is the weighted average:
+
+```c blending.c
+final_out[level].data[imgIndex] = 
+    (short)(out[level].data[imgIndex] / (out_mask[level].data[maskIndex] + WEIGHT_EPS));
+```
+
+## Practical Examples
+
+### Two-Image Panorama
+
+```c examples/stitch.c
+// Load images
+Image img1 = create_image("left.jpeg");
+Image img2 = create_image("right.jpeg");
+
+// Create complementary masks with 10% overlap
+Image mask1 = create_mask(img1.width, img1.height, 0.1f, 0, 1);  // Fade right
+Image mask2 = create_mask(img2.width, img2.height, 0.1f, 1, 0);  // Fade left
+
+// Setup output canvas
+int overlap = (img1.width * 0.1f);
+int out_width = (img1.width * 2) - (overlap * 2);
+StitchRect out_size = {0, 0, out_width, img1.height};
+
+// Create blender
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+
+// Feed images at appropriate positions
+StitchPoint pt1 = {0, 0};
+feed(b, &img1, &mask1, pt1);
+
+StitchPoint pt2 = {img1.width - overlap * 2, 0};
+feed(b, &img2, &mask2, pt2);
+
+// Blend and save
+blend(b);
+save_image(&b->result, "panorama.jpg");
+
+// Cleanup
+destroy_blender(b);
+destroy_image(&img1);
+destroy_image(&img2);
+destroy_image(&mask1);
+destroy_image(&mask2);
+```
+
+### Custom Mask Creation
+
+For advanced use cases, create custom masks programmatically:
+
+```c Custom Mask
+// Create circular mask
+Image create_circular_mask(int width, int height, int cx, int cy, int radius) {
+    Image mask = create_empty_image(width, height, GRAY_CHANNELS);
+    
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int dx = x - cx;
+            int dy = y - cy;
+            float distance = sqrt(dx * dx + dy * dy);
+            
+            if (distance < radius) {
+                mask.data[y * width + x] = 255;  // Inside circle
+            } else if (distance < radius + 10) {
+                // Fade region
+                float t = (distance - radius) / 10.0f;
+                mask.data[y * width + x] = (unsigned char)(255 * (1.0f - t));
+            } else {
+                mask.data[y * width + x] = 0;  // Outside circle
+            }
+        }
+    }
+    
+    return mask;
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Overlap Region Size">
+    **Recommendation:** 10-20% overlap for most panoramas
+    
+    - Too small (less than 5%): Visible seams, artifacts
+    - Optimal (10-20%): Smooth transitions
+    - Too large (more than 30%): Wasted computation, potential ghosting
+    
+    ```c
+    float range = 0.15f;  // 15% is a safe default
+    Image mask = create_mask(width, height, range, 0, 1);
+    ```
+  </Accordion>
+  
+  <Accordion title="Mask Symmetry">
+    For best results, adjacent images should have complementary masks:
+    
+    ```c
+    // Image 1: fade out right edge
+    Image mask1 = create_mask(w, h, 0.1f, 0, 1);
+    
+    // Image 2: fade out left edge (symmetric)
+    Image mask2 = create_mask(w, h, 0.1f, 1, 0);
+    ```
+    
+    The overlapping region should sum to approximately 1.0 (255) when both masks overlap.
+  </Accordion>
+  
+  <Accordion title="Distance Transform Trade-offs">
+    **Enable when:**
+    - Using feather blending
+    - Hard-edged masks create visible seams
+    - Images have similar exposure
+    
+    **Disable when:**
+    - Using multiband blending (less critical)
+    - Processing time is critical
+    - Masks already have smooth gradients
+  </Accordion>
+  
+  <Accordion title="Memory Management">
+    Masks are full-resolution images and consume memory:
+    
+    ```c
+    Memory per mask = width × height × 1 byte
+    ```
+    
+    Always destroy masks after feeding to the blender:
+    
+    ```c
+    feed(b, &img, &mask, pt);
+    destroy_image(&mask);  // Can free immediately
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Warning>
+  **Common Issues:**
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Assertion Failed" icon="triangle-exclamation">
+    ```
+    Assertion failed: img->height == mask_img->height && 
+                      img->width == mask_img->width
+    ```
+    
+    **Solution:** Ensure mask dimensions exactly match image dimensions.
+    
+    ```c
+    Image mask = create_mask(img.width, img.height, 0.1f, 0, 1);
+    ```
+  </Card>
+  
+  <Card title="Visible Seams" icon="slash">
+    Seams are visible in the output image.
+    
+    **Solutions:**
+    - Increase overlap region: `range = 0.2f`
+    - Enable distance transform for feather blending
+    - Switch to multiband blending
+    - Check mask symmetry
+  </Card>
+  
+  <Card title="Black Regions" icon="circle">
+    Output has unexpected black areas.
+    
+    **Causes:**
+    - Mask regions with zero values that don't overlap other images
+    - Incorrect positioning (gaps between images)
+    
+    **Solution:** Verify mask coverage and image positions.
+  </Card>
+  
+  <Card title="Ghosting" icon="ghost">
+    Double images or transparency effects.
+    
+    **Causes:**
+    - Overlapping regions too large
+    - Moving objects in the scene
+    - Poor image alignment
+    
+    **Solution:** Reduce overlap or align images better before stitching.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Blending" icon="layer-group" href="/concepts/blending">
+    Learn how masks are used in multiband and feather blending
+  </Card>
+  
+  <Card title="Image Types" icon="image" href="/concepts/image-types">
+    Understand the Image type used for masks
+  </Card>
+</CardGroup>

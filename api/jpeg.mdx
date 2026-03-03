@@ -1,0 +1,547 @@
+---
+title: 'JPEG Functions'
+description: 'JPEG compression, decompression, and image format conversions'
+---
+
+## Overview
+
+Provides JPEG encoding/decoding capabilities and utilities for image format conversion, masking, and border manipulation. Built on top of TurboJPEG for high-performance compression.
+
+## Types
+
+### Image
+
+Represents an 8-bit unsigned char image.
+
+```c
+typedef struct {
+    unsigned char *data;
+    int width;
+    int height;
+    int channels;
+} Image;
+```
+
+<ResponseField name="data" type="unsigned char*">
+  Pixel data buffer (row-major order)
+</ResponseField>
+
+<ResponseField name="width" type="int">
+  Image width in pixels
+</ResponseField>
+
+<ResponseField name="height" type="int">
+  Image height in pixels
+</ResponseField>
+
+<ResponseField name="channels" type="int">
+  Number of color channels (1 for grayscale, 3 for RGB)
+</ResponseField>
+
+### ImageF
+
+Represents a floating-point image.
+
+```c
+typedef struct {
+    float *data;
+    int width;
+    int height;
+    int channels;
+} ImageF;
+```
+
+<ResponseField name="data" type="float*">
+  Floating-point pixel data buffer
+</ResponseField>
+
+<ResponseField name="width" type="int">
+  Image width in pixels
+</ResponseField>
+
+<ResponseField name="height" type="int">
+  Image height in pixels
+</ResponseField>
+
+<ResponseField name="channels" type="int">
+  Number of color channels
+</ResponseField>
+
+### ImageS
+
+Represents a short integer image.
+
+```c
+typedef struct {
+    short *data;
+    int width;
+    int height;
+    int channels;
+} ImageS;
+```
+
+<ResponseField name="data" type="short*">
+  Short integer pixel data buffer
+</ResponseField>
+
+<ResponseField name="width" type="int">
+  Image width in pixels
+</ResponseField>
+
+<ResponseField name="height" type="int">
+  Image height in pixels
+</ResponseField>
+
+<ResponseField name="channels" type="int">
+  Number of color channels
+</ResponseField>
+
+### BorderType
+
+Enumeration for border handling modes.
+
+```c
+typedef enum {
+    BORDER_CONSTANT,
+    BORDER_REFLECT
+} BorderType;
+```
+
+<ResponseField name="BORDER_CONSTANT" type="enum">
+  Fill border with constant value (typically 0)
+</ResponseField>
+
+<ResponseField name="BORDER_REFLECT" type="enum">
+  Reflect image pixels at boundaries
+</ResponseField>
+
+## Constants
+
+```c
+#define RGB_CHANNELS 3
+#define GRAY_CHANNELS 1
+```
+
+## Functions
+
+### decompress_jpeg
+
+Decompresses a JPEG file into an Image structure.
+
+```c
+Image decompress_jpeg(const char *filename);
+```
+
+<ParamField path="filename" type="const char*" required>
+  Path to JPEG file to decompress
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Decompressed image with allocated data buffer
+</ResponseField>
+
+<Note>
+  Returns an RGB image (3 channels) regardless of source format. Check `img.data != NULL` to verify successful loading.
+</Note>
+
+#### Example
+
+```c
+Image img = decompress_jpeg("photo.jpg");
+if (img.data != NULL) {
+    printf("Loaded %dx%d JPEG\n", img.width, img.height);
+    // Process image...
+    destroy_image(&img);
+} else {
+    fprintf(stderr, "Failed to load JPEG\n");
+}
+```
+
+### compress_jpeg
+
+Compresses an RGB image to JPEG format.
+
+```c
+int compress_jpeg(const char *outputFilename, const Image *img, int quality);
+```
+
+<ParamField path="outputFilename" type="const char*" required>
+  Output JPEG file path
+</ParamField>
+
+<ParamField path="img" type="const Image*" required>
+  Pointer to RGB image to compress (must have 3 channels)
+</ParamField>
+
+<ParamField path="quality" type="int" required>
+  JPEG quality (1-100, where 100 is best quality)
+</ParamField>
+
+<ResponseField name="return" type="int">
+  1 on success, 0 on failure
+</ResponseField>
+
+<Note>
+  The image must have exactly 3 channels (RGB). For grayscale images, use `compress_grayscale_jpeg` instead.
+</Note>
+
+#### Example
+
+```c
+Image img = create_image("input.jpg");
+if (compress_jpeg("output.jpg", &img, 95)) {
+    printf("Saved with quality 95\n");
+}
+```
+
+### compress_grayscale_jpeg
+
+Compresses a grayscale image to JPEG format.
+
+```c
+int compress_grayscale_jpeg(const char *outputFilename, const Image *img, int quality);
+```
+
+<ParamField path="outputFilename" type="const char*" required>
+  Output JPEG file path
+</ParamField>
+
+<ParamField path="img" type="const Image*" required>
+  Pointer to grayscale image (must have 1 channel)
+</ParamField>
+
+<ParamField path="quality" type="int" required>
+  JPEG quality (1-100)
+</ParamField>
+
+<ResponseField name="return" type="int">
+  1 on success, 0 on failure
+</ResponseField>
+
+#### Example
+
+```c
+Image gray = convert_RGB_to_gray(&img);
+compress_grayscale_jpeg("gray.jpg", &gray, 90);
+destroy_image(&gray);
+```
+
+### convert_RGB_to_gray
+
+Converts an RGB image to grayscale.
+
+```c
+Image convert_RGB_to_gray(const Image *img);
+```
+
+<ParamField path="img" type="const Image*" required>
+  Pointer to source RGB image (3 channels)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Newly allocated grayscale image (1 channel)
+</ResponseField>
+
+<Note>
+  Uses standard luminance conversion: Y = 0.299R + 0.587G + 0.114B
+</Note>
+
+#### Example
+
+```c
+Image rgb = decompress_jpeg("color.jpg");
+Image gray = convert_RGB_to_gray(&rgb);
+printf("Converted to %d channel(s)\n", gray.channels); // prints 1
+```
+
+### create_mask
+
+Creates a horizontal gradient mask for image blending.
+
+```c
+Image create_mask(int width, int height, float range, int left, int right);
+```
+
+<ParamField path="width" type="int" required>
+  Mask width in pixels
+</ParamField>
+
+<ParamField path="height" type="int" required>
+  Mask height in pixels
+</ParamField>
+
+<ParamField path="range" type="float" required>
+  Gradient transition range as fraction of width (0.0-1.0)
+</ParamField>
+
+<ParamField path="left" type="int" required>
+  Value for left edge (0 or 1, scaled to 0 or 255)
+</ParamField>
+
+<ParamField path="right" type="int" required>
+  Value for right edge (0 or 1, scaled to 0 or 255)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Grayscale mask image with smooth horizontal gradient
+</ResponseField>
+
+<Note>
+  The `range` parameter controls the transition zone width. For example, 0.1 creates a gradient over 10% of the image width.
+</Note>
+
+#### Example
+
+```c
+// White on left fading to black on right over 20% of width
+Image mask = create_mask(1024, 768, 0.2f, 1, 0);
+```
+
+### create_vertical_mask
+
+Creates a vertical gradient mask for image blending.
+
+```c
+Image create_vertical_mask(int width, int height, float range, int top, int bottom);
+```
+
+<ParamField path="width" type="int" required>
+  Mask width in pixels
+</ParamField>
+
+<ParamField path="height" type="int" required>
+  Mask height in pixels
+</ParamField>
+
+<ParamField path="range" type="float" required>
+  Gradient transition range as fraction of height (0.0-1.0)
+</ParamField>
+
+<ParamField path="top" type="int" required>
+  Value for top edge (0 or 1)
+</ParamField>
+
+<ParamField path="bottom" type="int" required>
+  Value for bottom edge (0 or 1)
+</ParamField>
+
+<ResponseField name="return" type="Image">
+  Grayscale mask image with smooth vertical gradient
+</ResponseField>
+
+#### Example
+
+```c
+// Black on top fading to white on bottom
+Image vmask = create_vertical_mask(1024, 768, 0.15f, 0, 1);
+```
+
+### add_border_to_image
+
+Adds border padding to an image.
+
+```c
+void add_border_to_image(Image *img,
+                         int borderTop, int borderBottom, 
+                         int borderLeft, int borderRight,
+                         int channels, BorderType borderType);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to image (modified in-place)
+</ParamField>
+
+<ParamField path="borderTop" type="int" required>
+  Pixels to add on top
+</ParamField>
+
+<ParamField path="borderBottom" type="int" required>
+  Pixels to add on bottom
+</ParamField>
+
+<ParamField path="borderLeft" type="int" required>
+  Pixels to add on left
+</ParamField>
+
+<ParamField path="borderRight" type="int" required>
+  Pixels to add on right
+</ParamField>
+
+<ParamField path="channels" type="int" required>
+  Number of channels in the image
+</ParamField>
+
+<ParamField path="borderType" type="BorderType" required>
+  Border fill method (BORDER_CONSTANT or BORDER_REFLECT)
+</ParamField>
+
+<Note>
+  Modifies the image structure in-place by reallocating the data buffer with expanded dimensions.
+</Note>
+
+#### Example
+
+```c
+Image img = decompress_jpeg("photo.jpg");
+// Add 10-pixel reflective border on all sides
+add_border_to_image(&img, 10, 10, 10, 10, img.channels, BORDER_REFLECT);
+printf("New size: %dx%d\n", img.width, img.height);
+```
+
+### convert_image_to_image_f
+
+Converts unsigned char image to floating-point format.
+
+```c
+void convert_image_to_image_f(Image* in, ImageF *out);
+```
+
+<ParamField path="in" type="Image*" required>
+  Source image (unsigned char)
+</ParamField>
+
+<ParamField path="out" type="ImageF*" required>
+  Destination image (must be pre-allocated with same dimensions)
+</ParamField>
+
+<Note>
+  The `out` image must already be allocated with matching dimensions. Values are converted from [0, 255] to [0.0, 255.0].
+</Note>
+
+#### Example
+
+```c
+Image img = decompress_jpeg("photo.jpg");
+ImageF imgf = create_empty_image_f(img.width, img.height, img.channels);
+convert_image_to_image_f(&img, &imgf);
+```
+
+### convert_image_to_image_s
+
+Converts unsigned char image to short integer format.
+
+```c
+void convert_image_to_image_s(Image* in, ImageS *out);
+```
+
+<ParamField path="in" type="Image*" required>
+  Source image (unsigned char)
+</ParamField>
+
+<ParamField path="out" type="ImageS*" required>
+  Destination image (must be pre-allocated)
+</ParamField>
+
+### convert_imagef_to_image
+
+Converts floating-point image to unsigned char format.
+
+```c
+void convert_imagef_to_image(ImageF* in, Image *out);
+```
+
+<ParamField path="in" type="ImageF*" required>
+  Source float image
+</ParamField>
+
+<ParamField path="out" type="Image*" required>
+  Destination image (must be pre-allocated)
+</ParamField>
+
+<Note>
+  Values are clamped to [0, 255] range during conversion.
+</Note>
+
+### convert_images_to_image
+
+Converts short integer image to unsigned char format.
+
+```c
+void convert_images_to_image(ImageS* in, Image *out);
+```
+
+<ParamField path="in" type="ImageS*" required>
+  Source short image
+</ParamField>
+
+<ParamField path="out" type="Image*" required>
+  Destination image (must be pre-allocated)
+</ParamField>
+
+### crop_image_buf
+
+Crops an image buffer by removing borders.
+
+```c
+void crop_image_buf(Image *img, int cut_top, int cut_bottom, 
+                    int cut_left, int cut_right, int channels);
+```
+
+<ParamField path="img" type="Image*" required>
+  Pointer to image to crop (modified in-place)
+</ParamField>
+
+<ParamField path="cut_top" type="int" required>
+  Pixels to remove from top
+</ParamField>
+
+<ParamField path="cut_bottom" type="int" required>
+  Pixels to remove from bottom
+</ParamField>
+
+<ParamField path="cut_left" type="int" required>
+  Pixels to remove from left
+</ParamField>
+
+<ParamField path="cut_right" type="int" required>
+  Pixels to remove from right
+</ParamField>
+
+<ParamField path="channels" type="int" required>
+  Number of channels
+</ParamField>
+
+## Complete Usage Example
+
+```c
+#include "jpeg.h"
+#include "image_operations.h"
+
+void process_jpeg() {
+    // Load JPEG
+    Image img = decompress_jpeg("input.jpg");
+    if (img.data == NULL) {
+        fprintf(stderr, "Failed to load image\n");
+        return;
+    }
+    
+    // Convert to grayscale
+    Image gray = convert_RGB_to_gray(&img);
+    
+    // Add reflective border
+    add_border_to_image(&gray, 20, 20, 20, 20, 
+                        gray.channels, BORDER_REFLECT);
+    
+    // Convert to float for processing
+    ImageF grayf = create_empty_image_f(gray.width, gray.height, 
+                                        gray.channels);
+    convert_image_to_image_f(&gray, &grayf);
+    
+    // Process float image...
+    // ...
+    
+    // Convert back to unsigned char
+    Image result = create_empty_image(grayf.width, grayf.height, 
+                                      grayf.channels);
+    convert_imagef_to_image(&grayf, &result);
+    
+    // Save result
+    compress_grayscale_jpeg("output.jpg", &result, 95);
+    
+    // Cleanup
+    destroy_image(&img);
+    destroy_image(&gray);
+    destroy_image_f(&grayf);
+    destroy_image(&result);
+}
+```

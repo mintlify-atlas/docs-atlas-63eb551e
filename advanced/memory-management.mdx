@@ -1,0 +1,593 @@
+---
+title: 'Memory Management'
+description: 'Best practices for managing image memory and avoiding leaks in the Stitcher library'
+---
+
+## Overview
+
+The Stitcher library uses manual memory management with explicit allocation and deallocation. Understanding the memory lifecycle is critical to avoid leaks and segmentation faults.
+
+## Image Types and Memory Layout
+
+### Three Image Types
+
+The library defines three image structures with different pixel types:
+
+```c
+// Unsigned 8-bit (0-255) - for input/output images
+typedef struct {
+    unsigned char *data;
+    int width;
+    int height;
+    int channels;  // 1 (grayscale) or 3 (RGB)
+} Image;
+
+// Signed 16-bit (-32768 to 32767) - for Laplacian pyramids
+typedef struct {
+    short *data;
+    int width;
+    int height;
+    int channels;
+} ImageS;
+
+// 32-bit float - for accumulation and blending
+typedef struct {
+    float *data;
+    int width;
+    int height;
+    int channels;
+} ImageF;
+```
+
+### Memory Layout
+
+All image types use **row-major, interleaved channel layout**:
+
+```
+RGB Image: [R0,G0,B0, R1,G1,B1, R2,G2,B2, ..., Rn,Gn,Bn]
+Gray Image: [G0, G1, G2, ..., Gn]
+
+Pixel at (x, y) = data[(y * width + x) * channels + channel_offset]
+```
+
+**Example:**
+
+```c
+// Access red channel of pixel at (10, 20) in RGB image
+int index = (20 * img.width + 10) * 3 + 0;  // +0 for R, +1 for G, +2 for B
+unsigned char red = img.data[index];
+```
+
+## Image Lifecycle
+
+### Creation Functions
+
+From `image_operations.c:12-27`, images are created with `calloc` (zero-initialized):
+
+```c
+Image create_empty_image(int width, int height, int channels);
+ImageS create_empty_image_s(int width, int height, int channels);
+ImageF create_empty_image_f(int width, int height, int channels);
+```
+
+**Implementation (macro-generated):**
+
+```c
+Image create_empty_image(int width, int height, int channels) {
+    Image img;
+    img.data = (unsigned char *)calloc(width * height * channels, 
+                                        sizeof(unsigned char));
+    if (!img.data) {
+        return img;  // data == NULL indicates failure
+    }
+    img.channels = channels;
+    img.width = width;
+    img.height = height;
+    return img;
+}
+```
+
+<Note>
+Images are returned by value, not by pointer. The data buffer is allocated on the heap, but the struct itself is copied.
+</Note>
+
+### Loading from File
+
+From `image_operations.c:10`:
+
+```c
+Image create_image(const char *filename) {
+    return decompress_jpeg(filename);
+}
+```
+
+This allocates memory for the image data internally.
+
+### Destruction Functions
+
+From `image_operations.c:47-56`:
+
+```c
+void destroy_image(Image *img);
+void destroy_image_s(ImageS *img);
+void destroy_image_f(ImageF *img);
+```
+
+**Implementation:**
+
+```c
+void destroy_image(Image *img) {
+    if (img->data != NULL) {
+        free(img->data);
+    }
+}
+```
+
+<Warning>
+`destroy_image` does NOT set `img->data = NULL` after freeing. You should manually set it to NULL to avoid double-free:
+
+```c
+destroy_image(&img);
+img.data = NULL;  // Good practice
+```
+</Warning>
+
+## Memory Ownership Rules
+
+### Rule 1: Caller Owns Returned Images
+
+Functions that return images by value allocate new memory that the **caller must free**:
+
+```c
+// You own this memory
+Image down = downsample(&img);      // Allocates new memory
+Image up = upsample(&img, 4.0f);    // Allocates new memory
+
+// YOU must free it
+destroy_image(&down);
+destroy_image(&up);
+```
+
+### Rule 2: Functions Do Not Free Inputs
+
+Input images are never freed by library functions:
+
+```c
+Image img = create_image("input.jpg");
+Image down = downsample(&img);
+// img is still valid here
+
+destroy_image(&down);
+destroy_image(&img);  // You must free the original too
+```
+
+### Rule 3: Blender Owns Intermediate Buffers
+
+From `blending.c:36-79`, the blender allocates internal pyramids:
+
+```c
+Blender *b = create_blender(MULTIBAND, out_size, num_bands);
+// b owns:
+// - b->out (pyramid of ImageF)
+// - b->out_mask (pyramid of ImageF)
+// - b->final_out (pyramid of ImageS)
+
+destroy_blender(b);  // Frees all internal memory
+```
+
+<Warning>
+Do NOT manually free blender internal buffers. `destroy_blender` handles all cleanup.
+</Warning>
+
+### Rule 4: Result Image Ownership
+
+The blender's result image is owned by the blender:
+
+```c
+blend(b);
+Image result = b->result;  // Shallow copy - does NOT allocate new memory
+
+// Option 1: Save and let blender clean up
+save_image(&b->result, "output.jpg");
+destroy_blender(b);  // Frees result.data
+
+// Option 2: Copy result data if you need it after destroy
+unsigned char *copy = malloc(image_size(&b->result));
+memcpy(copy, b->result.data, image_size(&b->result));
+destroy_blender(b);
+// Now you own 'copy'
+```
+
+## Common Memory Patterns
+
+### Pattern 1: Simple Downsample/Upsample
+
+From `examples/downsampling.c:9-21`:
+
+```c
+Image img = create_image("input.jpg");
+
+// Create downsampled version
+Image down = downsample(&img);
+save_image(&down, "downsampled.jpg");
+destroy_image(&down);
+
+// Create upsampled version
+Image up = upsample(&img, 4.0f);
+save_image(&up, "upsampled.jpg");
+destroy_image(&up);
+
+// Cleanup original
+destroy_image(&img);
+```
+
+### Pattern 2: Pyramid Construction
+
+From `examples/downsampling.c:23-36`:
+
+```c
+Image img = create_image("input.jpg");
+
+// Build pyramid by repeated downsampling
+for (int i = 0; i < 3; i++) {
+    Image down = downsample(&img);
+    
+    char filename[100];
+    sprintf(filename, "level%d.jpg", i);
+    save_image(&down, filename);
+    
+    // Free previous level and replace with new level
+    destroy_image(&img);
+    img = down;  // Transfer ownership
+}
+
+// Free final level
+destroy_image(&img);
+```
+
+<Note>
+This pattern reuses the `img` variable by destroying the old image and assigning the new one. This is safe because images are returned by value.
+</Note>
+
+### Pattern 3: Multi-Band Blending
+
+From `examples/stitch.c:9-63`:
+
+```c
+// Load images (you own these)
+Image img1 = create_image("apple.jpg");
+Image img2 = create_image("orange.jpg");
+Image mask1 = create_image_mask(img1.width, img1.height, 0.1f, 0, 1);
+Image mask2 = create_image_mask(img2.width, img2.height, 0.1f, 1, 0);
+
+// Create blender (blender owns internal state)
+Blender *b = create_blender(MULTIBAND, out_size, num_bands);
+
+// Feed images (blender copies data, you still own originals)
+feed(b, &img1, &mask1, pt1);
+feed(b, &img2, &mask2, pt2);
+
+// Blend (blender creates b->result internally)
+blend(b);
+
+// Save result (blender still owns result.data)
+save_image(&b->result, "output.jpg");
+
+// Cleanup (order matters!)
+destroy_blender(b);  // Frees b->result.data
+destroy_image(&img1);
+destroy_image(&img2);
+destroy_image(&mask1);
+destroy_image(&mask2);
+```
+
+## Memory Leak Prevention
+
+### Use Goto for Cleanup
+
+From `blending.c:349-353`, use goto labels for error handling:
+
+```c
+int multi_band_feed(Blender *b, Image *img, Image *mask_img, StitchPoint tl) {
+    ImageS images[b->num_bands + 1];
+    int return_val = 1;
+    
+    // Allocate resources
+    images[0] = create_empty_image_s(img->width, img->height, img->channels);
+    for (int j = 0; j < b->num_bands; ++j) {
+        images[j + 1] = downsample_s(&images[j]);
+        if (!images[j + 1].data) {
+            return_val = 0;
+            goto clean;  // Jump to cleanup code
+        }
+        // ... more allocations ...
+    }
+    
+clean:
+    // Always executed, even on error
+    for (size_t i = 0; i <= b->num_bands; i++) {
+        destroy_image_s(&images[i]);
+    }
+    return return_val;
+}
+```
+
+### Check for NULL After Allocation
+
+```c
+Image img = create_empty_image(width, height, channels);
+if (!img.data) {
+    fprintf(stderr, "Failed to allocate image\n");
+    return -1;
+}
+```
+
+### Free in Reverse Order of Allocation
+
+General principle:
+
+```c
+// Allocate
+Image img1 = create_image("1.jpg");
+Image img2 = create_image("2.jpg");
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+
+// Free in reverse order
+destroy_blender(b);
+destroy_image(&img2);
+destroy_image(&img1);
+```
+
+## Memory Profiling
+
+### Valgrind (Linux/Mac)
+
+Check for memory leaks:
+
+```bash
+valgrind --leak-check=full \
+         --show-leak-kinds=all \
+         --track-origins=yes \
+         --verbose \
+         ./your_program
+```
+
+**Expected output (no leaks):**
+
+```
+HEAP SUMMARY:
+    in use at exit: 0 bytes in 0 blocks
+  total heap usage: 1,234 allocs, 1,234 frees, 52,428,800 bytes allocated
+
+All heap blocks were freed -- no leaks are possible
+```
+
+### AddressSanitizer (All Platforms)
+
+Compile with ASan:
+
+```cmake
+target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize=address -g)
+target_link_options(${PROJECT_NAME} PRIVATE -fsanitize=address)
+```
+
+Run your program:
+
+```bash
+./your_program
+# ASan will report leaks and use-after-free errors
+```
+
+### Memory Usage Calculation
+
+Estimate memory usage:
+
+```c
+int image_size(Image *img) {
+    return img->channels * img->height * img->width;
+}
+
+int image_size_s(ImageS *img) {
+    return img->channels * img->height * img->width * sizeof(short);
+}
+
+int image_size_f(ImageF *img) {
+    return img->channels * img->height * img->width * sizeof(float);
+}
+```
+
+**Example calculation:**
+
+```c
+// 4000x3000 RGB image
+Image img = create_empty_image(4000, 3000, 3);
+// Memory: 4000 * 3000 * 3 * 1 byte = 36 MB
+
+// Multi-band blender with 5 bands
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+// Pyramid levels: 1x + 0.25x + 0.0625x + ... ≈ 1.33x
+// ImageF accumulator: 36 MB * 1.33 * 4 (float) = 192 MB
+// ImageS pyramid: 36 MB * 1.33 * 2 (short) = 96 MB
+// Total: ~300 MB for one blender
+```
+
+<Warning>
+Large images with many pyramid bands can consume significant memory. A 8000×6000 image with 7 bands may require over 1 GB.
+</Warning>
+
+## Common Pitfalls
+
+### Pitfall 1: Double Free
+
+```c
+// BAD: Double free
+Image img = create_image("input.jpg");
+destroy_image(&img);
+destroy_image(&img);  // Segmentation fault!
+
+// GOOD: Set to NULL after free
+Image img = create_image("input.jpg");
+destroy_image(&img);
+img.data = NULL;
+destroy_image(&img);  // Safe (checks for NULL)
+```
+
+### Pitfall 2: Use After Free
+
+```c
+// BAD: Using image after destroy
+Image img = create_image("input.jpg");
+destroy_image(&img);
+int size = image_size(&img);  // Uses freed img.data!
+
+// GOOD: Use before destroy
+Image img = create_image("input.jpg");
+int size = image_size(&img);
+destroy_image(&img);
+```
+
+### Pitfall 3: Forgetting to Free
+
+```c
+// BAD: Memory leak
+for (int i = 0; i < 100; i++) {
+    Image down = downsample(&img);
+    save_image(&down, "output.jpg");
+    // Forgot to destroy_image(&down)!
+}
+// Leaked 100 image buffers
+
+// GOOD: Always free
+for (int i = 0; i < 100; i++) {
+    Image down = downsample(&img);
+    save_image(&down, "output.jpg");
+    destroy_image(&down);  // Free each iteration
+}
+```
+
+### Pitfall 4: Shallow Copy
+
+```c
+// BAD: Shallow copy causes double-free
+Image img1 = create_image("input.jpg");
+Image img2 = img1;  // Shallow copy - both point to same data!
+destroy_image(&img1);
+destroy_image(&img2);  // Double free!
+
+// GOOD: Deep copy if needed
+Image img1 = create_image("input.jpg");
+Image img2 = create_empty_image(img1.width, img1.height, img1.channels);
+memcpy(img2.data, img1.data, image_size(&img1));
+destroy_image(&img1);
+destroy_image(&img2);  // Safe
+```
+
+### Pitfall 5: Blender Result Lifetime
+
+```c
+// BAD: Accessing result after destroy
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+feed(b, &img1, &mask1, pt1);
+blend(b);
+Image result = b->result;  // Shallow copy
+destroy_blender(b);  // Frees result.data
+save_image(&result, "output.jpg");  // Use-after-free!
+
+// GOOD: Save before destroy
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+feed(b, &img1, &mask1, pt1);
+blend(b);
+save_image(&b->result, "output.jpg");  // Save while blender alive
+destroy_blender(b);  // Now safe to destroy
+```
+
+## Best Practices
+
+### 1. Initialize Pointers to NULL
+
+```c
+Image img = {0};  // Initialize all fields to 0/NULL
+if (some_condition) {
+    img = create_image("input.jpg");
+}
+// Safe to call destroy even if not allocated
+destroy_image(&img);  // Checks for NULL
+```
+
+### 2. Use Stack Arrays for Fixed-Size Pyramids
+
+From `blending.c:232`:
+
+```c
+ImageS images[b->num_bands + 1];  // Stack allocation for pyramid
+// ... use images ...
+for (size_t i = 0; i <= b->num_bands; i++) {
+    destroy_image_s(&images[i]);  // Free data, not array itself
+}
+```
+
+The array is on the stack, but `images[i].data` is heap-allocated.
+
+### 3. Always Check Return Values
+
+```c
+Image img = create_empty_image(width, height, channels);
+if (!img.data) {
+    fprintf(stderr, "Failed to allocate image\n");
+    return -1;
+}
+
+Blender *b = create_blender(MULTIBAND, out_size, 5);
+if (!b) {
+    fprintf(stderr, "Failed to create blender\n");
+    destroy_image(&img);
+    return -1;
+}
+```
+
+### 4. Use RAII-Style Wrappers (C++)
+
+If using C++, wrap in smart pointers:
+
+```cpp
+struct ImageDeleter {
+    void operator()(Image* img) {
+        destroy_image(img);
+        delete img;
+    }
+};
+
+using ImagePtr = std::unique_ptr<Image, ImageDeleter>;
+
+ImagePtr img(new Image(create_image("input.jpg")));
+// Automatically freed when img goes out of scope
+```
+
+### 5. Profile Memory Usage
+
+Monitor memory during development:
+
+```c
+#include <sys/resource.h>
+
+void print_memory_usage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    printf("Memory usage: %ld KB\n", usage.ru_maxrss);
+}
+
+print_memory_usage();  // Before
+Blender *b = create_blender(MULTIBAND, out_size, 7);
+print_memory_usage();  // After
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Performance" icon="gauge-high" href="/advanced/performance">
+    Optimize your code with SIMD and compiler flags
+  </Card>
+  <Card title="Threading" icon="diagram-project" href="/advanced/threading">
+    Understand the multi-threaded architecture
+  </Card>
+</CardGroup>

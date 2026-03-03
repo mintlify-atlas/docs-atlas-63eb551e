@@ -1,0 +1,181 @@
+---
+title: Installation
+description: Build and install the Stitcher library on your platform
+---
+
+# Installation
+
+Stitcher uses CMake for building and includes a helper script (`build.sh`) to streamline the build process across different platforms.
+
+## Prerequisites
+
+Before building Stitcher, ensure you have the following installed:
+
+<Steps>
+  <Step title="CMake">
+    CMake 2.8.12 or later is required for building the project.
+    
+    ```bash
+    # macOS
+    brew install cmake
+    
+    # Ubuntu/Debian
+    sudo apt-get install cmake
+    ```
+  </Step>
+  
+  <Step title="C Compiler">
+    A C compiler with pthread support:
+    
+    - **macOS**: Xcode Command Line Tools
+    - **Linux**: GCC or Clang
+    - **Android**: Android NDK
+  </Step>
+  
+  <Step title="libjpeg-turbo (Optional)">
+    For JPEG support, install libjpeg-turbo:
+    
+    ```bash
+    # macOS
+    brew install jpeg-turbo
+    
+    # Ubuntu/Debian
+    sudo apt-get install libturbojpeg0-dev
+    ```
+    
+    <Note>
+      The build script will automatically build libjpeg-turbo from source if not using system libraries.
+    </Note>
+  </Step>
+</Steps>
+
+## Building from Source
+
+### Using the Build Script
+
+The easiest way to build Stitcher is using the provided `build.sh` script:
+
+<CodeGroup>
+
+```bash macOS
+# Build for macOS (x86_64 and ARM64)
+./build.sh build macos
+```
+
+```bash iOS
+# Build for iOS devices
+./build.sh build ios
+
+# Build for iOS simulator
+./build.sh build ios-sim
+```
+
+```bash Android
+# Build for Android (requires ANDROID_NDK environment variable)
+export ANDROID_NDK=/path/to/android-ndk
+./build.sh build android
+```
+
+</CodeGroup>
+
+The build script will:
+
+1. Build libjpeg-turbo for the target platform
+2. Build Stitcher as a static library
+3. Install headers and libraries to `installs/native-stitcher/<platform>/<arch>/`
+
+<Tip>
+  The build script automatically detects the number of CPU cores and uses parallel compilation for faster builds.
+</Tip>
+
+### Manual CMake Build
+
+For more control over the build process, you can use CMake directly:
+
+```bash
+# Create build directory
+mkdir build && cd build
+
+# Configure CMake
+cmake .. \
+  -DCMAKE_INSTALL_PREFIX=/path/to/install \
+  -DLIBJPEG_TURBO_ROOT=/path/to/libjpeg-turbo
+
+# Build
+make -j$(nproc)
+
+# Install
+make install
+```
+
+<Warning>
+  You must provide `CMAKE_INSTALL_PREFIX` - the build will fail if this is not set.
+</Warning>
+
+## Compiler Options
+
+Stitcher is compiled with optimization flags for maximum performance:
+
+- `-O3`: Aggressive optimization
+- `-pthread`: Multi-threading support
+- `SIMDE_ENABLE_NATIVE_ALIASES`: Enable SIMD optimizations
+
+## Installation Layout
+
+After building, the installation directory contains:
+
+```
+installs/native-stitcher/<platform>/<arch>/
+├── lib/
+│   └── libNativeStitcher.a
+└── include/
+    ├── blending.h
+    ├── image_operations.h
+    ├── jpeg.h
+    └── utils.h
+```
+
+## Cleaning Build Files
+
+To clean build files for a specific platform:
+
+```bash
+./build.sh clean <platform>
+```
+
+Supported platforms: `macos`, `ios`, `ios-sim`, `android`
+
+## Verifying the Installation
+
+To verify your build works correctly, compile and run the test example:
+
+<CodeGroup>
+
+```bash Direct Compilation
+# If you have libjpeg-turbo installed system-wide
+gcc -O3 -mavx2 -mfma -pthread -o stitch \
+  -I/usr/local/include \
+  -L/usr/local/lib -lturbojpeg \
+  stitch.c blending.c jpeg.c image_operations.c utils.c
+
+./stitch
+```
+
+```bash Using Built Library
+# Using the built NativeStitcher library
+gcc -pthread -o stitch \
+  -I../installs/native-stitcher/macos/x86_64/include \
+  -L../installs/native-stitcher/macos/x86_64/lib \
+  -Wl,-rpath,../installs/native-stitcher/macos/x86_64/lib \
+  -lNativeStitcher stitch.c
+
+./stitch
+```
+
+</CodeGroup>
+
+## Next Steps
+
+<Card title="Quick Start Guide" icon="rocket" href="/quickstart">
+  Learn how to use Stitcher in your project with a complete working example
+</Card>
