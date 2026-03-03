@@ -1,0 +1,77 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Stitcher",
+  "projectDescription": "A high-performance C library for multiband image merging and seamless blending using Laplacian pyramids.",
+  "theme": "aspen",
+  "primaryColor": "#2563eb",
+  "lightColor": "#60a5fa",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "introduction",
+          "installation",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "concepts/blending",
+          "concepts/image-types",
+          "concepts/masks"
+        ]
+      },
+      {
+        "group": "API Reference",
+        "pages": [
+          "api/blender",
+          "api/image-operations",
+          "api/jpeg",
+          "api/utilities"
+        ]
+      },
+      {
+        "group": "Examples",
+        "pages": [
+          "examples/multiband-blending",
+          "examples/feather-blending",
+          "examples/panorama"
+        ]
+      },
+      {
+        "group": "Advanced",
+        "pages": [
+          "advanced/performance",
+          "advanced/threading",
+          "advanced/memory-management"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multiband blending with Laplacian pyramids",
+    "Feather blending for smooth transitions",
+    "High-performance SIMD-optimized operations",
+    "Multi-threaded image processing",
+    "JPEG compression and decompression",
+    "Distance transform for mask refinement"
+  ],
+  "publicApiSurface": [
+    "create_blender",
+    "feed",
+    "blend",
+    "destroy_blender",
+    "create_image",
+    "save_image",
+    "destroy_image",
+    "create_image_mask",
+    "upsample",
+    "downsample",
+    "distance_transform",
+    "compress_jpeg",
+    "decompress_jpeg"
+  ]
+}
